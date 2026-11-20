@@ -454,7 +454,9 @@ impl FromPyObject<'_, '_> for UtcDateTime {
             .ok_or_else(|| PyTypeError::new_err("expected a datetime with non-None tzinfo"))?;
 
         // Verify that the tzinfo is UTC
-        let is_utc = tzinfo.eq(PyTzInfo::utc(ob.py())?)?;
+        // Identity check first: avoids a Python-level comparison for the common singleton case
+        let utc = PyTzInfo::utc(ob.py())?;
+        let is_utc = tzinfo.is(utc) || tzinfo.eq(utc)?;
 
         if !is_utc {
             return Err(PyValueError::new_err(
