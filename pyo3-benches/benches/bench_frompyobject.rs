@@ -4,7 +4,7 @@ use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criter
 
 use pyo3::{
     prelude::*,
-    types::{PyByteArray, PyBytes, PyList, PyString},
+    types::{PyByteArray, PyBytes, PyList, PyString, PyTuple},
 };
 
 #[derive(FromPyObject)]
@@ -117,7 +117,35 @@ fn vec_bytes_from_py_bytearray_large(b: &mut Bencher<'_>) {
     bench_vec_from_py_bytearray(b, &data);
 }
 
+fn array_small_from_py_list(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyList::new(py, [1.0f64, 2.0, 3.0]).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<[f64; 3]>().unwrap());
+    })
+}
+
+fn array_large_from_py_list(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyList::new(py, 0..512i32).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<[i64; 512]>().unwrap());
+    })
+}
+
+fn array_large_from_py_tuple(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyTuple::new(py, 0..512i32).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<[i64; 512]>().unwrap());
+    })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
+    c.bench_function("array_small_from_py_list", array_small_from_py_list);
+    c.bench_function("array_large_from_py_list", array_large_from_py_list);
+    c.bench_function("array_large_from_py_tuple", array_large_from_py_tuple);
+
     c.bench_function("enum_from_pyobject", enum_from_pyobject);
 
     c.bench_function("list_via_cast", list_via_cast);

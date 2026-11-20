@@ -1,8 +1,8 @@
 use crate::conversion::{FromPyObjectOwned, FromPyObjectSequence, IntoPyObject};
 #[cfg(feature = "experimental-inspect")]
 use crate::inspect::{PyStaticExpr, type_hint_identifier, type_hint_subscript};
-use crate::types::PySequence;
 use crate::types::any::PyAnyMethods;
+use crate::types::{PySequence, PySequenceMethods};
 use crate::{Borrowed, Bound, PyErr, exceptions};
 use crate::{FromPyObject, PyAny, PyResult, PyTypeInfo, Python, err::CastError, ffi};
 
@@ -78,13 +78,18 @@ where
         return Err(CastError::new(obj, PySequence::type_object(obj.py()).into_any()).into());
     }
 
+    // SAFETY: `PySequence_Check` passed above; `PySequence` is only used here to call the
+    // sequence protocol C API, which fails safely if the object does not support it.
+    let seq = unsafe { obj.cast_unchecked::<PySequence>() };
+
     let seq_len = obj.len()?;
     if seq_len != N {
         return Err(invalid_sequence_length(N, seq_len));
     }
+    // Index via the sequence protocol: `PyAnyMethods::get_item` would create a Python `int`
+    // for every index.
     array_try_from_fn(|idx| {
-        obj.get_item(idx)
-            .and_then(|any| any.extract().map_err(Into::into))
+        PySequenceMethods::get_item(&*seq, idx).and_then(|any| any.extract().map_err(Into::into))
     })
 }
 
