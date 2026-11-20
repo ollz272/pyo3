@@ -138,6 +138,46 @@ fn array_large_from_py_tuple(b: &mut Bencher<'_>) {
         let any = PyTuple::new(py, 0..512i32).unwrap().into_any();
 
         b.iter(|| black_box(&any).extract::<[i64; 512]>().unwrap());
+fn vec_ints_from_py_list_small(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyList::new(py, 0..3i32).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
+    })
+}
+
+fn vec_ints_from_py_list(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyList::new(py, 0..1000i32).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
+    })
+}
+
+fn vec_ints_from_py_tuple(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyTuple::new(py, 0..1000i32).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
+    })
+}
+
+fn vec_strings_from_py_list(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = PyList::new(py, (0..1000).map(|i| format!("item-{i}")))
+            .unwrap()
+            .into_any();
+
+        b.iter(|| black_box(&any).extract::<Vec<String>>().unwrap());
+    })
+}
+
+// A sequence which is neither a list nor a tuple, so takes the generic path.
+fn vec_ints_from_py_range(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = py.eval(c"range(1000)", None, None).unwrap();
+
+        b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
     })
 }
 
@@ -145,6 +185,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("array_small_from_py_list", array_small_from_py_list);
     c.bench_function("array_large_from_py_list", array_large_from_py_list);
     c.bench_function("array_large_from_py_tuple", array_large_from_py_tuple);
+    c.bench_function("vec_ints_from_py_list_small", vec_ints_from_py_list_small);
+    c.bench_function("vec_ints_from_py_list", vec_ints_from_py_list);
+    c.bench_function("vec_ints_from_py_tuple", vec_ints_from_py_tuple);
+    c.bench_function("vec_strings_from_py_list", vec_strings_from_py_list);
+    c.bench_function("vec_ints_from_py_range", vec_ints_from_py_range);
 
     c.bench_function("enum_from_pyobject", enum_from_pyobject);
 

@@ -20,7 +20,7 @@ use crate::exceptions::PyTypeError;
 #[cfg(feature = "experimental-inspect")]
 use crate::inspect::{PyStaticExpr, type_hint_identifier, type_hint_subscript};
 use crate::types::any::PyAnyMethods;
-use crate::types::{PySequence, PyString};
+use crate::types::{PyList, PyListMethods, PySequence, PyString, PyTuple, PyTupleMethods};
 use crate::{
     Borrowed, Bound, FromPyObject, PyAny, PyErr, PyResult, PyTypeInfo, Python, err::CastError, ffi,
 };
@@ -93,6 +93,23 @@ where
     A: Array,
     A::Item: FromPyObjectOwned<'py>,
 {
+    // Fast paths for exact lists and tuples, which avoid the overhead of the iterator protocol.
+    // Subclasses may override `__iter__`, so they take the generic path below.
+    if let Ok(list) = obj.cast_exact::<PyList>() {
+        let mut sv = SmallVec::with_capacity(list.len());
+        for item in list.iter() {
+            sv.push(item.extract::<A::Item>().map_err(Into::into)?);
+        }
+        return Ok(sv);
+    }
+    if let Ok(tuple) = obj.cast_exact::<PyTuple>() {
+        let mut sv = SmallVec::with_capacity(tuple.len());
+        for item in tuple.iter_borrowed() {
+            sv.push(item.extract::<A::Item>().map_err(Into::into)?);
+        }
+        return Ok(sv);
+    }
+
     // Types that pass `PySequence_Check` usually implement enough of the sequence protocol
     // to support this function and if not, we will only fail extraction safely.
     // SAFETY: passing valid pointer to python API

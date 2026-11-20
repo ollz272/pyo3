@@ -6,7 +6,7 @@ use crate::{
     conversion::{FromPyObject, FromPyObjectOwned, FromPyObjectSequence, IntoPyObject},
     exceptions::PyTypeError,
     ffi,
-    types::{PyAnyMethods, PySequence, PyString},
+    types::{PyAnyMethods, PyList, PyListMethods, PySequence, PyString, PyTuple, PyTupleMethods},
 };
 use crate::{Bound, PyAny, PyErr, Python};
 
@@ -84,6 +84,23 @@ fn extract_sequence<'py, T>(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Vec<T>>
 where
     T: FromPyObjectOwned<'py>,
 {
+    // Fast paths for exact lists and tuples, which avoid the overhead of the iterator protocol.
+    // Subclasses may override `__iter__`, so they take the generic path below.
+    if let Ok(list) = obj.cast_exact::<PyList>() {
+        let mut v = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            v.push(item.extract::<T>().map_err(Into::into)?);
+        }
+        return Ok(v);
+    }
+    if let Ok(tuple) = obj.cast_exact::<PyTuple>() {
+        let mut v = Vec::with_capacity(tuple.len());
+        for item in tuple.iter_borrowed() {
+            v.push(item.extract::<T>().map_err(Into::into)?);
+        }
+        return Ok(v);
+    }
+
     // Types that pass `PySequence_Check` usually implement enough of the sequence protocol
     // to support this function and if not, we will only fail extraction safely.
     // SAFETY: passing valid pointer to python API
@@ -159,6 +176,51 @@ mod tests {
         Python::attach(|py| {
             let v: Vec<i32> = py.eval(c"(1, 2)", None, None).unwrap().extract().unwrap();
             assert_eq!(v, [1, 2]);
+        });
+    }
+
+    #[test]
+    fn test_extract_list_to_vec() {
+        Python::attach(|py| {
+            let v: Vec<i32> = py.eval(c"[1, 2]", None, None).unwrap().extract().unwrap();
+            assert_eq!(v, [1, 2]);
+
+            let v: Vec<i32> = py.eval(c"[]", None, None).unwrap().extract().unwrap();
+            assert!(v.is_empty());
+
+            // errors from extracting elements are propagated
+            let obj = py.eval(c"[1, 'a']", None, None).unwrap();
+            assert!(obj.extract::<Vec<i32>>().is_err());
+            let obj = py.eval(c"(1, 'a')", None, None).unwrap();
+            assert!(obj.extract::<Vec<i32>>().is_err());
+        });
+    }
+
+    #[test]
+    fn test_extract_list_subclass_to_vec_uses_iter() {
+        Python::attach(|py| {
+            // subclasses which override `__iter__` must not take the exact-type fast path
+            let v: Vec<i32> = py
+                .eval(
+                    c"type('L', (list,), {'__iter__': lambda self: iter([7, 8])})([1])",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(v, [7, 8]);
+
+            let v: Vec<i32> = py
+                .eval(
+                    c"type('T', (tuple,), {'__iter__': lambda self: iter([7, 8])})((1,))",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(v, [7, 8]);
         });
     }
 
