@@ -486,7 +486,8 @@ impl FromPyObject<'_, '_> for Utc {
 
     fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
         let py_utc = Utc.into_pyobject(ob.py())?;
-        if ob.eq(py_utc)? {
+        // Identity check first: avoids a Python-level comparison for the common singleton case
+        if ob.is(py_utc) || ob.eq(py_utc)? {
             Ok(Utc)
         } else {
             Err(PyValueError::new_err("expected datetime.timezone.utc"))
@@ -541,7 +542,8 @@ impl FromPyObject<'_, '_> for Local {
 
     fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Local> {
         let local_tz = Local.into_pyobject(ob.py())?;
-        if ob.eq(local_tz)? {
+        // Identity check first: `ZoneInfo` instances are cached, so this is the common case
+        if ob.is(local_tz) || ob.eq(local_tz)? {
             Ok(Local)
         } else {
             let name = local_tz.getattr("key")?.cast_into::<PyString>()?;

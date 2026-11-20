@@ -15,6 +15,7 @@ pyo3-build-config = { path = "../pyo3-build-config" }
 [dev-dependencies]
 codspeed-criterion-compat = "5.0"
 criterion = "0.8.0"
+chrono = { version = "0.4.25", default-features = false }
 num-bigint = "0.4.3"
 rust_decimal = { version = "1.0.0", default-features = false }
 hashbrown = "0.17"
@@ -32,6 +33,10 @@ harness = false
 
 [[bench]]
 name = "bench_attach_scaling"
+harness = false
+
+[[bench]]
+name = "bench_chrono"
 harness = false
 
 [[bench]]
