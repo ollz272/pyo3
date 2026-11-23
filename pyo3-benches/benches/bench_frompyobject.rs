@@ -23,6 +23,15 @@ fn enum_from_pyobject(b: &mut Bencher<'_>) {
     })
 }
 
+fn vec_enum_from_pyobject(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let strings: Vec<String> = (0..1000).map(|i| i.to_string()).collect();
+        let any = PyList::new(py, strings).unwrap().into_any();
+
+        b.iter(|| black_box(&any).extract::<Vec<ManyTypes>>().unwrap());
+    })
+}
+
 fn list_via_cast(b: &mut Bencher<'_>) {
     Python::attach(|py| {
         let any = PyList::empty(py).into_any();
@@ -192,6 +201,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("vec_ints_from_py_range", vec_ints_from_py_range);
 
     c.bench_function("enum_from_pyobject", enum_from_pyobject);
+    c.bench_function("vec_enum_from_pyobject", vec_enum_from_pyobject);
 
     c.bench_function("list_via_cast", list_via_cast);
 
