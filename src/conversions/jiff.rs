@@ -993,13 +993,13 @@ mod tests {
     fn test_pyo3_timezone_utc_frompyobject() {
         Python::attach(|py| {
             // `timezone.utc` singleton (fast path)
-            let tz: TimeZone = python_utc(py).extract().unwrap();
+            let tz: TimeZone = PyTzInfo::utc(py).unwrap().extract().unwrap();
             assert_eq!(Offset::UTC.to_time_zone(), tz);
 
             // zero offset timezone which is not the singleton (slow path)
             let py_timedelta = new_py_datetime_ob(py, "timedelta", (0, 0, 0));
             let py_tzinfo = new_py_datetime_ob(py, "timezone", (py_timedelta, "Z"));
-            assert!(!py_tzinfo.is(python_utc(py)));
+            assert!(!py_tzinfo.is(PyTzInfo::utc(py).unwrap()));
             let tz: TimeZone = py_tzinfo.extract().unwrap();
             assert_eq!(Offset::UTC.to_time_zone(), tz);
             let offset: Offset = py_tzinfo.extract().unwrap();

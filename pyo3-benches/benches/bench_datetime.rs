@@ -105,9 +105,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("extract_chrono_datetime", extract_chrono_datetime);
     c.bench_function("extract_chrono_time", extract_chrono_time);
     c.bench_function("extract_chrono_timedelta", extract_chrono_timedelta);
-use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criterion};
+}
 
-use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 fn py_datetimes(py: Python<'_>) -> (Bound<'_, PyAny>, Bound<'_, PyAny>) {
@@ -191,18 +190,18 @@ fn time_offset_datetime_nonzero_extract(b: &mut Bencher<'_>) {
 }
 
 fn jiff_zoned_utc_extract(b: &mut Bencher<'_>) {
-    extract_bench::<jiff::Zoned>(b, true);
+    extract_bench::<jiff::ZonedDateTime>(b, true);
 }
 
 fn jiff_zoned_nonzero_extract(b: &mut Bencher<'_>) {
-    extract_bench::<jiff::Zoned>(b, false);
+    extract_bench::<jiff::ZonedDateTime>(b, false);
 }
 
 fn jiff_timestamp_utc_extract(b: &mut Bencher<'_>) {
     extract_bench::<jiff::Timestamp>(b, true);
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn offset_benchmark(c: &mut Criterion) {
     c.bench_function(
         "chrono_fixed_offset_utc_into_pyobject",
         chrono_fixed_offset_utc_into_pyobject,
@@ -239,8 +238,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("jiff_zoned_nonzero_extract", jiff_zoned_nonzero_extract);
     c.bench_function("jiff_timestamp_utc_extract", jiff_timestamp_utc_extract);
 }
-
-use pyo3::types::{PyDateTime, PyTime};
 
 fn datetime_new_with_fold_false(b: &mut Bencher<'_>) {
     Python::attach(|py| {
@@ -279,5 +276,10 @@ fn fold_benchmark(c: &mut Criterion) {
     c.bench_function("time_new_with_fold_true", time_new_with_fold_true);
 }
 
-criterion_group!(benches, criterion_benchmark, fold_benchmark);
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    offset_benchmark,
+    fold_benchmark
+);
 criterion_main!(benches);
