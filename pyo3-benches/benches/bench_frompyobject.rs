@@ -188,6 +188,39 @@ fn vec_ints_from_py_range(b: &mut Bencher<'_>) {
 
         b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
     })
+fn bench_smallvec_from_py_bytes<A: smallvec::Array<Item = u8>>(b: &mut Bencher<'_>, data: &[u8]) {
+    Python::attach(|py| {
+        let any = PyBytes::new(py, data).into_any();
+
+        b.iter(|| black_box(&any).extract::<smallvec::SmallVec<A>>().unwrap());
+    })
+}
+
+fn bench_smallvec_from_py_bytearray<A: smallvec::Array<Item = u8>>(
+    b: &mut Bencher<'_>,
+    data: &[u8],
+) {
+    Python::attach(|py| {
+        let any = PyByteArray::new(py, data).into_any();
+
+        b.iter(|| black_box(&any).extract::<smallvec::SmallVec<A>>().unwrap());
+    })
+}
+
+fn smallvec_bytes_from_py_bytes_inline(b: &mut Bencher<'_>) {
+    bench_smallvec_from_py_bytes::<[u8; 32]>(b, &[7u8; 32]);
+}
+
+fn smallvec_bytes_from_py_bytes_spilled(b: &mut Bencher<'_>) {
+    bench_smallvec_from_py_bytes::<[u8; 8]>(b, &[7u8; 32]);
+}
+
+fn smallvec_bytes_from_py_bytearray_inline(b: &mut Bencher<'_>) {
+    bench_smallvec_from_py_bytearray::<[u8; 32]>(b, &[7u8; 32]);
+}
+
+fn smallvec_bytes_from_py_bytearray_spilled(b: &mut Bencher<'_>) {
+    bench_smallvec_from_py_bytearray::<[u8; 8]>(b, &[7u8; 32]);
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -235,6 +268,23 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function(
         "vec_bytes_from_py_bytearray_large",
         vec_bytes_from_py_bytearray_large,
+    );
+
+    c.bench_function(
+        "smallvec_bytes_from_py_bytes_inline",
+        smallvec_bytes_from_py_bytes_inline,
+    );
+    c.bench_function(
+        "smallvec_bytes_from_py_bytes_spilled",
+        smallvec_bytes_from_py_bytes_spilled,
+    );
+    c.bench_function(
+        "smallvec_bytes_from_py_bytearray_inline",
+        smallvec_bytes_from_py_bytearray_inline,
+    );
+    c.bench_function(
+        "smallvec_bytes_from_py_bytearray_spilled",
+        smallvec_bytes_from_py_bytearray_spilled,
     );
 }
 

@@ -15,7 +15,7 @@
 //!
 //! Note that you must use compatible versions of smallvec and PyO3.
 //! The required smallvec version may vary based on the version of PyO3.
-use crate::conversion::{FromPyObjectOwned, IntoPyObject};
+use crate::conversion::{FromPyObjectOwned, FromPyObjectSequence, IntoPyObject};
 use crate::exceptions::PyTypeError;
 #[cfg(feature = "experimental-inspect")]
 use crate::inspect::{PyStaticExpr, type_hint_identifier, type_hint_subscript};
@@ -81,6 +81,12 @@ where
     );
 
     fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        // Bulk copy for `bytes` / `bytearray` into `SmallVec<[u8; N]>`, as `Vec<u8>` does.
+        if let Some(extractor) = A::Item::sequence_extractor(obj, crate::conversion::private::Token)
+        {
+            return Ok(SmallVec::from_vec(extractor.to_vec()));
+        }
+
         if obj.is_instance_of::<PyString>() {
             return Err(PyTypeError::new_err("Can't extract `str` to `SmallVec`"));
         }
@@ -139,7 +145,7 @@ where
 mod tests {
     use super::*;
     use crate::platform::prelude::*;
-    use crate::types::{PyBytes, PyBytesMethods, PyDict, PyList};
+    use crate::types::{PyByteArray, PyBytes, PyBytesMethods, PyDict, PyList};
 
     #[test]
     fn test_smallvec_from_py_object() {
@@ -189,6 +195,55 @@ mod tests {
             let nums: SmallVec<[u16; 8]> = [1, 2, 3, 4, 5].iter().cloned().collect();
             let obj = nums.into_pyobject(py).unwrap();
             assert!(obj.is_instance_of::<PyList>());
+        });
+    }
+
+    #[test]
+    fn test_smallvec_u8_from_bytes_and_bytearray() {
+        Python::attach(|py| {
+            let data: Vec<u8> = (0..32).collect();
+
+            // inline (fits) and spilled (does not fit) for both bytes and bytearray
+            let bytes = PyBytes::new(py, &data);
+            let sv: SmallVec<[u8; 32]> = bytes.extract().unwrap();
+            assert_eq!(sv.as_slice(), &data[..]);
+            assert!(!sv.spilled());
+            let sv: SmallVec<[u8; 8]> = bytes.extract().unwrap();
+            assert_eq!(sv.as_slice(), &data[..]);
+            assert!(sv.spilled());
+
+            let bytearray = PyByteArray::new(py, &data);
+            let sv: SmallVec<[u8; 32]> = bytearray.extract().unwrap();
+            assert_eq!(sv.as_slice(), &data[..]);
+            assert!(!sv.spilled());
+            let sv: SmallVec<[u8; 8]> = bytearray.extract().unwrap();
+            assert_eq!(sv.as_slice(), &data[..]);
+            assert!(sv.spilled());
+
+            // empty
+            let sv: SmallVec<[u8; 8]> = PyBytes::new(py, &[]).extract().unwrap();
+            assert!(sv.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_smallvec_u8_from_list_still_works() {
+        Python::attach(|py| {
+            let l = PyList::new(py, [1u8, 2, 3]).unwrap();
+            let sv: SmallVec<[u8; 8]> = l.extract().unwrap();
+            assert_eq!(sv.as_slice(), [1, 2, 3]);
+        });
+    }
+
+    #[test]
+    fn test_smallvec_u8_from_str_fails() {
+        Python::attach(|py| {
+            let s = crate::types::PyString::new(py, "abc");
+            let sv: PyResult<SmallVec<[u8; 8]>> = s.extract();
+            assert_eq!(
+                sv.unwrap_err().to_string(),
+                "TypeError: Can't extract `str` to `SmallVec`"
+            );
         });
     }
 }
