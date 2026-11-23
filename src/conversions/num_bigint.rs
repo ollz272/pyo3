@@ -148,7 +148,7 @@ where
 
 // for identical functionality between BigInt and BigUint
 macro_rules! bigint_conversion {
-    ($rust_ty: ty, $is_signed: literal, $bits:path, $iter_u32_digits:path, $negative:expr) => {
+    ($rust_ty: ty, $is_signed: literal, $bits:path, $iter_u32_digits:path, $negative:expr, $to_primitive:path) => {
         #[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
         impl<'py> IntoPyObject<'py> for $rust_ty {
             type Target = PyInt;
@@ -210,6 +210,13 @@ macro_rules! bigint_conversion {
                 {
                     use $crate::py_result_ext::PyResultExt;
                     use $crate::types::any::PyAnyMethods;
+
+                    // fast path: values which fit in 64 bits need only a single C call
+                    if let Some(value) = $to_primitive(self) {
+                        let Ok(int) = value.into_pyobject(py);
+                        return Ok(int);
+                    }
+
                     let bytes = self.to_le_bytes();
                     let bytes_obj = PyBytes::new(py, &bytes);
                     let kwargs = if $is_signed {
@@ -222,7 +229,11 @@ macro_rules! bigint_conversion {
                     // SAFETY: `int.from_bytes` returns a python `int`
                     unsafe {
                         py.get_type::<PyInt>()
-                            .call_method("from_bytes", (bytes_obj, "little"), kwargs.as_ref())
+                            .call_method(
+                                crate::intern!(py, "from_bytes"),
+                                (bytes_obj, crate::intern!(py, "little")),
+                                kwargs.as_ref(),
+                            )
                             .cast_into_unchecked()
                     }
                 }
@@ -236,14 +247,16 @@ bigint_conversion!(
     false,
     BigUint::bits,
     BigUint::iter_u32_digits,
-    |_| false
+    |_| false,
+    num_traits::ToPrimitive::to_u64
 );
 bigint_conversion!(
     BigInt,
     true,
     BigInt::bits,
     BigInt::iter_u32_digits,
-    |value: &BigInt| BigInt::sign(value) == Sign::Minus
+    |value: &BigInt| BigInt::sign(value) == Sign::Minus,
+    num_traits::ToPrimitive::to_i64
 );
 
 #[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
@@ -271,6 +284,10 @@ impl<'py> FromPyObject<'_, 'py> for BigInt {
                 let sign = if negative { Sign::Minus } else { Sign::Plus };
                 Ok(BigInt::new(sign, int_from_pylong_digits(digits)))
             });
+        }
+        // fast path: values which fit in an i64 need only a single C call
+        if let Some(value) = int_to_i64(&num)? {
+            return Ok(BigInt::from(value));
         }
         #[cfg(not(Py_LIMITED_API))]
         {
@@ -338,6 +355,11 @@ impl<'py> FromPyObject<'_, 'py> for BigUint {
                 Ok(BigUint::new(int_from_pylong_digits(digits)))
             });
         }
+        // fast path: values which fit in an i64 need only a single C call;
+        // negative values fall through to the slow path below, which raises the error
+        if let Some(Ok(value)) = int_to_i64(&num)?.map(u64::try_from) {
+            return Ok(BigUint::from(value));
+        }
         #[cfg(not(Py_LIMITED_API))]
         {
             let buffer = int_to_u32_vec::<false>(&num)?;
@@ -353,6 +375,26 @@ impl<'py> FromPyObject<'_, 'py> for BigUint {
             Ok(BigUint::from_bytes_le(bytes.as_bytes()))
         }
     }
+}
+
+/// Fast path for ints which fit in an `i64`, using a single C call instead of
+/// the general (Python method call or byte buffer based) conversions.
+///
+/// Returns `Ok(None)` if the value does not fit in an `i64`.
+#[inline]
+fn int_to_i64(long: &Bound<'_, PyInt>) -> PyResult<Option<i64>> {
+    let mut overflow = 0;
+    // SAFETY: `long` is a valid `int` object
+    let value = unsafe { crate::ffi::PyLong_AsLongLongAndOverflow(long.as_ptr(), &mut overflow) };
+    if overflow != 0 {
+        return Ok(None);
+    }
+    if value == -1 {
+        if let Some(err) = PyErr::take(long.py()) {
+            return Err(err);
+        }
+    }
+    Ok(Some(value))
 }
 
 #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
@@ -706,6 +748,115 @@ class C:
                 err.value(py).to_string(),
                 "can't convert negative int to unsigned"
             );
+        });
+    }
+
+    /// Values on both sides of the 64-bit fast path boundaries, compared against
+    /// values computed by Python.
+    #[test]
+    fn convert_64_bit_boundaries() {
+        Python::attach(|py| {
+            let bigint_cases = [
+                ("0", BigInt::from(0)),
+                ("-1", BigInt::from(-1)),
+                ("-2**63", BigInt::from(i64::MIN)),
+                ("-2**63 - 1", BigInt::from(i64::MIN) - 1u8),
+                ("2**63 - 1", BigInt::from(i64::MAX)),
+                ("2**63", BigInt::from(i64::MAX) + 1u8),
+                ("2**64 - 1", BigInt::from(u64::MAX)),
+                ("2**64", BigInt::from(u64::MAX) + 1u8),
+                ("-2**64", -(BigInt::from(u64::MAX) + 1u8)),
+            ];
+            for (code, value) in bigint_cases {
+                let code = std::ffi::CString::new(code).unwrap();
+                let py_value = py.eval(&code, None, None).unwrap();
+                assert_eq!(py_value.extract::<BigInt>().unwrap(), value);
+                assert!(py_value.eq(&value).unwrap());
+                assert!(
+                    value
+                        .into_pyobject(py)
+                        .unwrap()
+                        .as_any()
+                        .eq(&py_value)
+                        .unwrap()
+                );
+            }
+
+            let biguint_cases = [
+                ("0", BigUint::from(0u8)),
+                ("2**63 - 1", BigUint::from(i64::MAX as u64)),
+                ("2**63", BigUint::from(1u64 << 63)),
+                ("2**64 - 1", BigUint::from(u64::MAX)),
+                ("2**64", BigUint::from(u64::MAX) + 1u8),
+            ];
+            for (code, value) in biguint_cases {
+                let code = std::ffi::CString::new(code).unwrap();
+                let py_value = py.eval(&code, None, None).unwrap();
+                assert_eq!(py_value.extract::<BigUint>().unwrap(), value);
+                assert!(py_value.eq(&value).unwrap());
+                assert!(
+                    value
+                        .into_pyobject(py)
+                        .unwrap()
+                        .as_any()
+                        .eq(&py_value)
+                        .unwrap()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn convert_int_subclass_and_bool() {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(c"class I(int): pass", None, Some(&locals)).unwrap();
+            for (code, expected) in [
+                (c"I(5)", BigInt::from(5)),
+                (c"I(-5)", BigInt::from(-5)),
+                (c"I(2**100)", BigInt::from(1u8) << 100u32),
+                (c"I(-2**100)", -(BigInt::from(1u8) << 100u32)),
+                (c"True", BigInt::from(1)),
+                (c"False", BigInt::from(0)),
+            ] {
+                let value = py.eval(code, None, Some(&locals)).unwrap();
+                assert_eq!(value.extract::<BigInt>().unwrap(), expected);
+                if let Some(expected) = expected.to_biguint() {
+                    assert_eq!(value.extract::<BigUint>().unwrap(), expected);
+                } else {
+                    assert!(value.extract::<BigUint>().is_err());
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn extract_64_bit_fast_path_skips_python_methods() {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"class J(int):\n    def bit_length(self): raise RuntimeError\n    def to_bytes(self, *a, **k): raise RuntimeError",
+                None,
+                Some(&locals),
+            )
+            .unwrap();
+            // values which fit in an i64 are converted with a single C call on every build,
+            // so int subclass overrides of `bit_length` / `to_bytes` are not consulted
+            let value = py.eval(c"J(-5)", None, Some(&locals)).unwrap();
+            assert_eq!(value.extract::<BigInt>().unwrap(), BigInt::from(-5));
+            let value = py.eval(c"J(5)", None, Some(&locals)).unwrap();
+            assert_eq!(value.extract::<BigUint>().unwrap(), BigUint::from(5u8));
+        });
+    }
+
+    #[test]
+    fn biguint_negative_small_and_large() {
+        Python::attach(|py| {
+            // small negative values do not take the 64-bit fast path for `BigUint`
+            for code in [c"-1", c"-(2**63)", c"-(2**130)"] {
+                let value = py.eval(code, None, None).unwrap();
+                assert!(value.extract::<BigUint>().is_err());
+            }
         });
     }
 

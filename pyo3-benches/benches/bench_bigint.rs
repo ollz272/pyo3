@@ -58,6 +58,8 @@ fn into_biguint(bench: &mut Bencher<'_>, value: &BigUint) {
 fn criterion_benchmark(c: &mut Criterion) {
     let bigint_cases = [
         ("small", BigInt::from(-42)),
+        ("i64_min", BigInt::from(i64::MIN)),
+        ("i64_max_plus_one", BigInt::from(i64::MAX) + 1),
         ("big_negative", -(BigInt::from(10u8).pow(300))),
         ("big_positive", BigInt::from(10u8).pow(300)),
         ("huge_negative", -(BigInt::from(10u8).pow(3000))),
@@ -67,6 +69,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let biguint_cases = [
         ("zero", BigUint::from(0u8)),
         ("small", BigUint::from(42u8)),
+        ("u64_max", BigUint::from(u64::MAX)),
         ("big", BigUint::from(10u8).pow(300)),
         ("huge", BigUint::from(10u8).pow(3000)),
     ];
