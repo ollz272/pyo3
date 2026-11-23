@@ -40,6 +40,10 @@ fn dict_locked_for_each(b: &mut Bencher<'_>) {
             })
             .unwrap();
         });
+fn dict_len(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let dict = (0..100u64).map(|i| (i, i * 2)).into_py_dict(py).unwrap();
+        b.iter(|| black_box(&dict).len());
     })
 }
 
@@ -150,6 +154,7 @@ fn mapping_from_dict(b: &mut Bencher<'_>) {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("iter_dict", iter_dict);
     c.bench_function("dict_locked_for_each", dict_locked_for_each);
+    c.bench_function("dict_len", dict_len);
     c.bench_function("dict_new", dict_new);
     c.bench_function("dict_get_item", dict_get_item);
     c.bench_function("extract_hashmap", extract_hashmap);

@@ -437,14 +437,14 @@ impl<'a, 'py> Borrowed<'a, 'py, PyDict> {
 }
 
 fn dict_len(dict: &Bound<'_, PyDict>) -> Py_ssize_t {
-    #[cfg(any(PyPy, GraalPy, Py_LIMITED_API, Py_GIL_DISABLED))]
+    #[cfg(any(PyPy, GraalPy, Py_LIMITED_API))]
     unsafe {
         ffi::PyDict_Size(dict.as_ptr())
     }
 
-    #[cfg(not(any(PyPy, GraalPy, Py_LIMITED_API, Py_GIL_DISABLED)))]
+    #[cfg(not(any(PyPy, GraalPy, Py_LIMITED_API)))]
     unsafe {
-        (*dict.as_ptr().cast::<ffi::PyDictObject>()).ma_used
+        ffi::PyDict_GET_SIZE(dict.as_ptr())
     }
 }
 

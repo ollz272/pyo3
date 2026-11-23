@@ -1,5 +1,7 @@
 #[cfg(all(GraalPy, Py_3_13))]
 use crate::PyObject;
+#[cfg(all(Py_GIL_DISABLED, not(any(PyPy, GraalPy))))]
+use crate::cpython::pyatomic::_Py_atomic_load_ssize_relaxed;
 #[cfg(not(GraalPy))]
 use crate::object::*;
 #[cfg(not(any(PyPy, GraalPy)))]
@@ -100,7 +102,21 @@ extern_libpython! {
     */
 }
 
-// skipped PyDict_GET_SIZE
+/// Macro, trading safety for speed
+#[inline]
+#[cfg(not(any(PyPy, GraalPy)))]
+pub unsafe fn PyDict_GET_SIZE(op: *mut PyObject) -> Py_ssize_t {
+    debug_assert_eq!(crate::PyDict_Check(op), 1);
+    let mp = op.cast::<PyDictObject>();
+    #[cfg(Py_GIL_DISABLED)]
+    {
+        _Py_atomic_load_ssize_relaxed(&raw const (*mp).ma_used)
+    }
+    #[cfg(not(Py_GIL_DISABLED))]
+    {
+        (*mp).ma_used
+    }
+}
 
 extern_libpython! {
     #[cfg(Py_3_13)]
