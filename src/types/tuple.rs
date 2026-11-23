@@ -1,6 +1,6 @@
 //! Python tuples and related types.
 
-#[cfg(all(not(any(PyPy, GraalPy)), any(not(Py_LIMITED_API), Py_3_12)))]
+#[cfg(not(any(PyPy, GraalPy)))]
 use crate::BoundObject;
 use crate::ffi::{self, Py_ssize_t};
 use crate::ffi_ptr_ext::FfiPtrExt;
@@ -780,7 +780,47 @@ macro_rules! tuple_conversion (($length:expr, $(($n:tt, $T:ident)),+) => {
             self.into_pyobject_or_pyerr(function.py())?.call(function, kwargs, token)
         }
 
-        #[cfg(not(all(not(any(PyPy, GraalPy)), any(not(Py_LIMITED_API), Py_3_12))))]
+        // The limited API only gained `PyObject_Vectorcall` in 3.12. Before that, the variadic
+        // `*ObjArgs` functions still avoid building a tuple (and, for methods, a bound method).
+        #[cfg(all(Py_LIMITED_API, not(Py_3_12), not(any(PyPy, GraalPy))))]
+        fn call_positional(
+            self,
+            function: Borrowed<'_, 'py, PyAny>,
+            _: crate::call::private::Token,
+        ) -> PyResult<Bound<'py, PyAny>> {
+            let py = function.py();
+            let args_objects = ($(self.$n.into_pyobject_or_pyerr(py)?),*,);
+            unsafe {
+                ffi::PyObject_CallFunctionObjArgs(
+                    function.as_ptr(),
+                    $(args_objects.$n.as_ptr(),)*
+                    core::ptr::null_mut::<ffi::PyObject>(),
+                )
+                .assume_owned_or_err(py)
+            }
+        }
+
+        #[cfg(all(Py_LIMITED_API, not(Py_3_12), not(any(PyPy, GraalPy))))]
+        fn call_method_positional(
+            self,
+            object: Borrowed<'_, 'py, PyAny>,
+            method_name: Borrowed<'_, 'py, crate::types::PyString>,
+            _: crate::call::private::Token,
+        ) -> PyResult<Bound<'py, PyAny>> {
+            let py = object.py();
+            let args_objects = ($(self.$n.into_pyobject_or_pyerr(py)?),*,);
+            unsafe {
+                ffi::PyObject_CallMethodObjArgs(
+                    object.as_ptr(),
+                    method_name.as_ptr(),
+                    $(args_objects.$n.as_ptr(),)*
+                    core::ptr::null_mut::<ffi::PyObject>(),
+                )
+                .assume_owned_or_err(py)
+            }
+        }
+
+        #[cfg(any(PyPy, GraalPy))]
         fn call_positional(
             self,
             function: Borrowed<'_, 'py, PyAny>,
@@ -789,7 +829,7 @@ macro_rules! tuple_conversion (($length:expr, $(($n:tt, $T:ident)),+) => {
             self.into_pyobject_or_pyerr(function.py())?.call_positional(function, token)
         }
 
-        #[cfg(not(all(not(any(PyPy, GraalPy)), any(not(Py_LIMITED_API), Py_3_12))))]
+        #[cfg(any(PyPy, GraalPy))]
         fn call_method_positional(
             self,
             object: Borrowed<'_, 'py, PyAny>,
@@ -905,7 +945,47 @@ macro_rules! tuple_conversion (($length:expr, $(($n:tt, $T:ident)),+) => {
             self.into_pyobject_or_pyerr(function.py())?.call(function, kwargs, token)
         }
 
-        #[cfg(not(all(not(any(PyPy, GraalPy)), any(not(Py_LIMITED_API), Py_3_12))))]
+        // The limited API only gained `PyObject_Vectorcall` in 3.12. Before that, the variadic
+        // `*ObjArgs` functions still avoid building a tuple (and, for methods, a bound method).
+        #[cfg(all(Py_LIMITED_API, not(Py_3_12), not(any(PyPy, GraalPy))))]
+        fn call_positional(
+            self,
+            function: Borrowed<'_, 'py, PyAny>,
+            _: crate::call::private::Token,
+        ) -> PyResult<Bound<'py, PyAny>> {
+            let py = function.py();
+            let args_objects = ($(self.$n.into_pyobject_or_pyerr(py)?),*,);
+            unsafe {
+                ffi::PyObject_CallFunctionObjArgs(
+                    function.as_ptr(),
+                    $(args_objects.$n.as_ptr(),)*
+                    core::ptr::null_mut::<ffi::PyObject>(),
+                )
+                .assume_owned_or_err(py)
+            }
+        }
+
+        #[cfg(all(Py_LIMITED_API, not(Py_3_12), not(any(PyPy, GraalPy))))]
+        fn call_method_positional(
+            self,
+            object: Borrowed<'_, 'py, PyAny>,
+            method_name: Borrowed<'_, 'py, crate::types::PyString>,
+            _: crate::call::private::Token,
+        ) -> PyResult<Bound<'py, PyAny>> {
+            let py = object.py();
+            let args_objects = ($(self.$n.into_pyobject_or_pyerr(py)?),*,);
+            unsafe {
+                ffi::PyObject_CallMethodObjArgs(
+                    object.as_ptr(),
+                    method_name.as_ptr(),
+                    $(args_objects.$n.as_ptr(),)*
+                    core::ptr::null_mut::<ffi::PyObject>(),
+                )
+                .assume_owned_or_err(py)
+            }
+        }
+
+        #[cfg(any(PyPy, GraalPy))]
         fn call_positional(
             self,
             function: Borrowed<'_, 'py, PyAny>,
@@ -914,7 +994,7 @@ macro_rules! tuple_conversion (($length:expr, $(($n:tt, $T:ident)),+) => {
             self.into_pyobject_or_pyerr(function.py())?.call_positional(function, token)
         }
 
-        #[cfg(not(all(not(any(PyPy, GraalPy)), any(not(Py_LIMITED_API), Py_3_12))))]
+        #[cfg(any(PyPy, GraalPy))]
         fn call_method_positional(
             self,
             object: Borrowed<'_, 'py, PyAny>,
@@ -1850,6 +1930,83 @@ mod tests {
             test_iterators(&tuple, |iter| {
                 assert_eq!(iter.count(), 3);
             });
+        })
+    }
+
+    #[test]
+    #[expect(
+        clippy::needless_borrows_for_generic_args,
+        reason = "exercises the `&(T0, ..)` call impls"
+    )]
+    fn test_rust_tuple_call_positional() {
+        use crate::exceptions::{PyAttributeError, PyTypeError, PyValueError};
+        use crate::types::PyModule;
+
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                c"
+def f(*args):
+    return args
+
+def fail(*args):
+    raise ValueError(args)
+
+class C:
+    def __init__(self):
+        self.attr = lambda *args: ('attr',) + args
+
+    def m(self, *args):
+        return ('m',) + args
+
+class G:
+    def __getattr__(self, name):
+        return lambda *args: (name,) + args
+",
+                c"test_rust_tuple_call.py",
+                c"test_rust_tuple_call",
+            )
+            .unwrap();
+            let f = module.getattr("f").unwrap();
+            let fail = module.getattr("fail").unwrap();
+            let c = module.getattr("C").unwrap().call0().unwrap();
+            let g = module.getattr("G").unwrap().call0().unwrap();
+
+            // owned and borrowed Rust tuples of length 1, 3 and 12
+            let r: (i32,) = f.call1((1,)).unwrap().extract().unwrap();
+            assert_eq!(r, (1,));
+            let r: (i32, String, f64) = f.call1(&(1, "a", 2.5)).unwrap().extract().unwrap();
+            assert_eq!(r, (1, "a".to_owned(), 2.5));
+            let twelve = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            let r: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) =
+                f.call1(twelve).unwrap().extract().unwrap();
+            assert_eq!(r, twelve);
+            let r: (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) =
+                f.call1(&twelve).unwrap().extract().unwrap();
+            assert_eq!(r, twelve);
+
+            // methods: a real method, a callable instance attribute and `__getattr__`
+            let r: (String, i32) = c.call_method1("m", (1,)).unwrap().extract().unwrap();
+            assert_eq!(r, ("m".to_owned(), 1));
+            let r: (String, i32, i32) = c.call_method1("m", &(1, 2)).unwrap().extract().unwrap();
+            assert_eq!(r, ("m".to_owned(), 1, 2));
+            let r: (String, i32, i32) = c.call_method1("attr", (1, 2)).unwrap().extract().unwrap();
+            assert_eq!(r, ("attr".to_owned(), 1, 2));
+            let r: (String, i32) = g.call_method1("dyn", (1,)).unwrap().extract().unwrap();
+            assert_eq!(r, ("dyn".to_owned(), 1));
+            let r: (String, i32) = g.call_method("dyn", (1,), None).unwrap().extract().unwrap();
+            assert_eq!(r, ("dyn".to_owned(), 1));
+
+            // errors
+            let err = c.call_method1("missing", (1,)).unwrap_err();
+            assert!(err.is_instance_of::<PyAttributeError>(py));
+            let err = c.call_method1("missing", &(1, 2)).unwrap_err();
+            assert!(err.is_instance_of::<PyAttributeError>(py));
+            let not_callable = 1i32.into_pyobject(py).unwrap();
+            let err = not_callable.call1((1,)).unwrap_err();
+            assert!(err.is_instance_of::<PyTypeError>(py));
+            let err = fail.call1((1, 2)).unwrap_err();
+            assert!(err.is_instance_of::<PyValueError>(py));
         })
     }
 }
