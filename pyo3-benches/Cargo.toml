@@ -19,7 +19,6 @@ chrono = { version = "0.4.25", default-features = false }
 num-bigint = "0.4.3"
 rust_decimal = { version = "1.0.0", default-features = false }
 hashbrown = "0.17"
-chrono = { version = "0.4.25", default-features = false }
 time = { version = "0.3.38", default-features = false }
 jiff = "0.2"
 smallvec = "1.0"
@@ -61,10 +60,6 @@ harness = false
 
 [[bench]]
 name = "bench_decimal"
-harness = false
-
-[[bench]]
-name = "bench_datetime"
 harness = false
 
 [[bench]]

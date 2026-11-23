@@ -238,6 +238,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("jiff_zoned_utc_extract", jiff_zoned_utc_extract);
     c.bench_function("jiff_zoned_nonzero_extract", jiff_zoned_nonzero_extract);
     c.bench_function("jiff_timestamp_utc_extract", jiff_timestamp_utc_extract);
+}
+
 use pyo3::types::{PyDateTime, PyTime};
 
 fn datetime_new_with_fold_false(b: &mut Bencher<'_>) {
@@ -270,12 +272,12 @@ fn time_new_with_fold_true(b: &mut Bencher<'_>) {
     })
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn fold_benchmark(c: &mut Criterion) {
     c.bench_function("datetime_new_with_fold_false", datetime_new_with_fold_false);
     c.bench_function("datetime_new_with_fold_true", datetime_new_with_fold_true);
     c.bench_function("time_new_with_fold_false", time_new_with_fold_false);
     c.bench_function("time_new_with_fold_true", time_new_with_fold_true);
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_benchmark, fold_benchmark);
 criterion_main!(benches);

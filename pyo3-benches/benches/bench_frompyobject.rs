@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criterion};
+use codspeed_criterion_compat::{Bencher, Criterion, criterion_group, criterion_main};
 
 use pyo3::{
     prelude::*,
@@ -147,6 +147,9 @@ fn array_large_from_py_tuple(b: &mut Bencher<'_>) {
         let any = PyTuple::new(py, 0..512i32).unwrap().into_any();
 
         b.iter(|| black_box(&any).extract::<[i64; 512]>().unwrap());
+    })
+}
+
 fn vec_ints_from_py_list_small(b: &mut Bencher<'_>) {
     Python::attach(|py| {
         let any = PyList::new(py, 0..3i32).unwrap().into_any();
@@ -188,6 +191,8 @@ fn vec_ints_from_py_range(b: &mut Bencher<'_>) {
 
         b.iter(|| black_box(&any).extract::<Vec<i64>>().unwrap());
     })
+}
+
 fn bench_smallvec_from_py_bytes<A: smallvec::Array<Item = u8>>(b: &mut Bencher<'_>, data: &[u8]) {
     Python::attach(|py| {
         let any = PyBytes::new(py, data).into_any();

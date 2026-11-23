@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
 use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;
 
-use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criterion};
+use codspeed_criterion_compat::{Bencher, Criterion, criterion_group, criterion_main};
 
 use pyo3::types::IntoPyDict;
 use pyo3::{prelude::*, types::PyMapping};
@@ -40,6 +40,9 @@ fn dict_locked_for_each(b: &mut Bencher<'_>) {
             })
             .unwrap();
         });
+    })
+}
+
 fn dict_len(b: &mut Bencher<'_>) {
     Python::attach(|py| {
         let dict = (0..100u64).map(|i| (i, i * 2)).into_py_dict(py).unwrap();
