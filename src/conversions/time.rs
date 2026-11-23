@@ -316,6 +316,10 @@ impl<'py> IntoPyObject<'py> for UtcOffset {
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         // Get offset in seconds
         let seconds_offset = self.whole_seconds();
+        if seconds_offset == 0 {
+            // `timezone(timedelta(0))` is the `timezone.utc` singleton, skip creating the delta
+            return Ok(PyTzInfo::utc(py)?.to_owned());
+        }
         let td = PyDelta::new(py, 0, seconds_offset, 0, true)?;
         PyTzInfo::fixed_offset(py, td)
     }
@@ -329,6 +333,11 @@ impl FromPyObject<'_, '_> for UtcOffset {
 
     fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
         let tz = ob.cast::<PyTzInfo>()?;
+
+        // Fast path: `timezone.utc` always has a zero offset
+        if tz.is(PyTzInfo::utc(tz.py())?) {
+            return Ok(UtcOffset::UTC);
+        }
 
         // Get the offset in seconds from the Python tzinfo
         let py_timedelta = tz.call_method1("utcoffset", (PyNone::get(tz.py()),))?;
@@ -1011,6 +1020,30 @@ mod tests {
             let neg_offset = UtcOffset::from_hms(-8, -15, 0).unwrap();
             let neg_total_seconds = utils::extract_total_seconds_from_utcoffset(neg_offset, py);
             assert_eq!(neg_total_seconds, -8.0 * 3600.0 - 15.0 * 60.0);
+        });
+    }
+
+    #[test]
+    fn test_time_utc_offset_zero_into_pyobject_is_utc() {
+        Python::attach(|py| {
+            let offset = UtcOffset::UTC.into_pyobject(py).unwrap();
+            assert!(offset.is(PyTzInfo::utc(py).unwrap()));
+        });
+    }
+
+    #[test]
+    fn test_time_utc_offset_zero_from_python_not_singleton() {
+        Python::attach(|py| {
+            let datetime = py.import("datetime").unwrap();
+            let timezone = datetime.getattr(intern!(py, "timezone")).unwrap();
+            let timedelta = datetime.getattr(intern!(py, "timedelta")).unwrap();
+
+            // zero offset timezone which is not the singleton (slow path)
+            let td = timedelta.call1((0, 0, 0)).unwrap();
+            let tz = timezone.call1((td, "Z")).unwrap();
+            assert!(!tz.is(PyTzInfo::utc(py).unwrap()));
+            let offset: UtcOffset = tz.extract().unwrap();
+            assert_eq!(offset, UtcOffset::UTC);
         });
     }
 

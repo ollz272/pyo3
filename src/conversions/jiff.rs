@@ -395,6 +395,11 @@ impl<'py> FromPyObject<'_, 'py> for TimeZone {
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         let ob = ob.cast::<PyTzInfo>()?;
 
+        // Fast path: `timezone.utc` is a fixed zero offset with no `key`
+        if ob.is(PyTzInfo::utc(ob.py())?) {
+            return Ok(Offset::UTC.to_time_zone());
+        }
+
         let attr = intern!(ob.py(), "key");
         if ob.hasattr(attr)? {
             Ok(TimeZone::get(
@@ -445,6 +450,11 @@ impl<'py> FromPyObject<'_, 'py> for Offset {
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         let py = ob.py();
         let ob = ob.cast::<PyTzInfo>()?;
+
+        // Fast path: `timezone.utc` always has a zero offset
+        if ob.is(PyTzInfo::utc(py)?) {
+            return Ok(Offset::UTC);
+        }
 
         let py_timedelta = ob.call_method1(intern!(py, "utcoffset"), (PyNone::get(py),))?;
         if py_timedelta.is_none() {
@@ -976,6 +986,24 @@ mod tests {
             let utc = Offset::UTC.into_pyobject(py).unwrap();
             let py_utc = python_utc(py);
             assert!(utc.is(&py_utc));
+        })
+    }
+
+    #[test]
+    fn test_pyo3_timezone_utc_frompyobject() {
+        Python::attach(|py| {
+            // `timezone.utc` singleton (fast path)
+            let tz: TimeZone = python_utc(py).extract().unwrap();
+            assert_eq!(Offset::UTC.to_time_zone(), tz);
+
+            // zero offset timezone which is not the singleton (slow path)
+            let py_timedelta = new_py_datetime_ob(py, "timedelta", (0, 0, 0));
+            let py_tzinfo = new_py_datetime_ob(py, "timezone", (py_timedelta, "Z"));
+            assert!(!py_tzinfo.is(python_utc(py)));
+            let tz: TimeZone = py_tzinfo.extract().unwrap();
+            assert_eq!(Offset::UTC.to_time_zone(), tz);
+            let offset: Offset = py_tzinfo.extract().unwrap();
+            assert_eq!(Offset::UTC, offset);
         })
     }
 

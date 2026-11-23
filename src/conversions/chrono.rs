@@ -399,6 +399,10 @@ impl<'py> IntoPyObject<'py> for FixedOffset {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let seconds_offset = self.local_minus_utc();
+        if seconds_offset == 0 {
+            // `timezone(timedelta(0))` is the `timezone.utc` singleton, skip creating the delta
+            return Ok(PyTzInfo::utc(py)?.to_owned());
+        }
         let td = PyDelta::new(py, 0, seconds_offset, 0, true)?;
         PyTzInfo::fixed_offset(py, td)
     }
@@ -430,6 +434,11 @@ impl FromPyObject<'_, '_> for FixedOffset {
     /// does not supports microseconds.
     fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
         let ob = ob.cast::<PyTzInfo>()?;
+
+        // Fast path: `timezone.utc` always has a zero offset
+        if ob.is(PyTzInfo::utc(ob.py())?) {
+            return Ok(Utc.fix());
+        }
 
         // Passing Python's None to the `utcoffset` function will only
         // work for timezones defined as fixed offsets in Python.
@@ -1154,6 +1163,30 @@ mod tests {
             let py_tzinfo = new_py_datetime_ob(py, "timezone", (py_timedelta,));
             let offset: FixedOffset = py_tzinfo.extract().unwrap();
             assert_eq!(FixedOffset::east_opt(3600).unwrap(), offset);
+        })
+    }
+
+    #[test]
+    fn test_pyo3_offset_fixed_zero_into_pyobject_is_utc() {
+        Python::attach(|py| {
+            let offset = FixedOffset::east_opt(0).unwrap().into_pyobject(py).unwrap();
+            assert!(offset.is(python_utc(py)));
+        })
+    }
+
+    #[test]
+    fn test_pyo3_offset_fixed_zero_frompyobject() {
+        Python::attach(|py| {
+            // `timezone.utc` singleton (fast path)
+            let offset: FixedOffset = python_utc(py).extract().unwrap();
+            assert_eq!(FixedOffset::east_opt(0).unwrap(), offset);
+
+            // zero offset timezone which is not the singleton (slow path)
+            let py_timedelta = new_py_datetime_ob(py, "timedelta", (0, 0, 0));
+            let py_tzinfo = new_py_datetime_ob(py, "timezone", (py_timedelta, "Z"));
+            assert!(!py_tzinfo.is(python_utc(py)));
+            let offset: FixedOffset = py_tzinfo.extract().unwrap();
+            assert_eq!(FixedOffset::east_opt(0).unwrap(), offset);
         })
     }
 
