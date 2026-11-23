@@ -333,7 +333,14 @@ impl<'py> PyDictMethods<'py> for Bound<'py, PyDict> {
         #[cfg(not(feature = "nightly"))]
         {
             crate::sync::critical_section::with_critical_section(self, || {
-                self.iter().try_for_each(|(key, value)| f(key, value))
+                // Step the iterator state directly rather than via `Iterator::next`, which
+                // would re-enter a (nested) critical section on this dict for every element.
+                let mut iter = self.iter();
+                // SAFETY: the enclosing critical section locks the dict
+                while let Some((key, value)) = unsafe { iter.inner.next_unchecked(&iter.dict) } {
+                    f(key, value)?;
+                }
+                Ok(())
             })
         }
     }
@@ -1277,6 +1284,63 @@ mod tests {
                     break;
                 };
             }
+        });
+    }
+
+    #[test]
+    fn test_locked_for_each() {
+        Python::attach(|py| {
+            let mut v = HashMap::new();
+            for i in 0..10 {
+                v.insert(i, i * 2);
+            }
+            let dict = (&v).into_pyobject(py).unwrap();
+
+            let seen = core::cell::RefCell::new(HashMap::new());
+            dict.locked_for_each(|key, value| {
+                let prev = seen
+                    .borrow_mut()
+                    .insert(key.extract::<i32>()?, value.extract::<i32>()?);
+                assert!(prev.is_none());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(seen.into_inner(), v);
+        });
+    }
+
+    #[test]
+    fn test_locked_for_each_error_stops_iteration() {
+        Python::attach(|py| {
+            let dict = (0..10).map(|i| (i, i)).into_py_dict(py).unwrap();
+
+            let calls = core::cell::Cell::new(0);
+            let err = dict
+                .locked_for_each(|_key, _value| {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 3 {
+                        Err(crate::exceptions::PyValueError::new_err("stop"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            assert!(err.is_instance_of::<crate::exceptions::PyValueError>(py));
+            assert_eq!(calls.get(), 3);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "dictionary changed size during iteration")]
+    fn test_locked_for_each_size_mutated() {
+        Python::attach(|py| {
+            let dict = (0..10).map(|i| (i, i)).into_py_dict(py).unwrap();
+
+            dict.locked_for_each(|key, _value| {
+                let key = key.extract::<i32>()?;
+                dict.set_item(key + 100, 0)
+            })
+            .unwrap();
         });
     }
 

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::cell::Cell;
 use std::hint::black_box;
 
 use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criterion};
@@ -19,6 +20,25 @@ fn iter_dict(b: &mut Bencher<'_>) {
                 let i: u64 = k.extract().unwrap();
                 sum += i;
             }
+        });
+    })
+}
+
+fn dict_locked_for_each(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        const LEN: usize = 100_000;
+        let dict = (0..LEN as u64)
+            .map(|i| (i, i * 2))
+            .into_py_dict(py)
+            .unwrap();
+        let sum = Cell::new(0);
+        b.iter(|| {
+            dict.locked_for_each(|k, _v| {
+                let i: u64 = k.extract()?;
+                sum.set(sum.get() + i);
+                Ok(())
+            })
+            .unwrap();
         });
     })
 }
@@ -129,6 +149,7 @@ fn mapping_from_dict(b: &mut Bencher<'_>) {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("iter_dict", iter_dict);
+    c.bench_function("dict_locked_for_each", dict_locked_for_each);
     c.bench_function("dict_new", dict_new);
     c.bench_function("dict_get_item", dict_get_item);
     c.bench_function("extract_hashmap", extract_hashmap);

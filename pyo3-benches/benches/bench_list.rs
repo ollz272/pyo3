@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::hint::black_box;
 
 use codspeed_criterion_compat::{criterion_group, criterion_main, Bencher, Criterion};
@@ -16,6 +17,22 @@ fn iter_list(b: &mut Bencher<'_>) {
                 let i: u64 = x.extract().unwrap();
                 sum += i;
             }
+        });
+    });
+}
+
+fn list_locked_for_each(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        const LEN: usize = 100_000;
+        let list = PyList::new(py, 0..LEN).unwrap();
+        let sum = Cell::new(0);
+        b.iter(|| {
+            list.locked_for_each(|x| {
+                let i: u64 = x.extract()?;
+                sum.set(sum.get() + i);
+                Ok(())
+            })
+            .unwrap();
         });
     });
 }
@@ -94,6 +111,7 @@ fn sequence_from_list(b: &mut Bencher<'_>) {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("iter_list", iter_list);
+    c.bench_function("list_locked_for_each", list_locked_for_each);
     c.bench_function("list_new", list_new);
     c.bench_function("list_nth", list_nth);
     c.bench_function("list_nth_back", list_nth_back);

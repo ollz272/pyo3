@@ -433,7 +433,17 @@ impl<'py> PyListMethods<'py> for Bound<'py, PyList> {
         F: Fn(Bound<'py, PyAny>) -> PyResult<()>,
     {
         crate::sync::critical_section::with_critical_section(self, || {
-            self.iter().try_for_each(closure)
+            // Step the iterator state directly rather than via `Iterator::next`, which would
+            // re-enter a (nested) critical section on this list for every element.
+            let mut index = Index(0);
+            let mut length = Length(self.len());
+            // SAFETY: the enclosing critical section locks the list
+            while let Some(item) =
+                unsafe { BoundListIterator::next_unsynchronized(&mut index, &mut length, self) }
+            {
+                closure(item)?;
+            }
+            Ok(())
         })
     }
 
@@ -1029,6 +1039,69 @@ mod tests {
                 idx += 1;
             }
             assert_eq!(idx, v.len());
+        });
+    }
+
+    #[test]
+    fn test_locked_for_each() {
+        Python::attach(|py| {
+            let v = vec![2, 3, 5, 7];
+            let list = PyList::new(py, &v).unwrap();
+            let seen = core::cell::RefCell::new(Vec::new());
+            list.locked_for_each(|el| {
+                seen.borrow_mut().push(el.extract::<i32>()?);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(seen.into_inner(), v);
+        });
+    }
+
+    #[test]
+    fn test_locked_for_each_error_stops_iteration() {
+        Python::attach(|py| {
+            let list = PyList::new(py, [2, 3, 5, 7]).unwrap();
+            let seen = core::cell::RefCell::new(Vec::new());
+            let err = list
+                .locked_for_each(|el| {
+                    let el = el.extract::<i32>()?;
+                    seen.borrow_mut().push(el);
+                    if el == 5 {
+                        Err(crate::exceptions::PyValueError::new_err("stop"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            assert!(err.is_instance_of::<crate::exceptions::PyValueError>(py));
+            assert_eq!(seen.into_inner(), vec![2, 3, 5]);
+        });
+    }
+
+    #[test]
+    fn test_locked_for_each_list_mutated() {
+        Python::attach(|py| {
+            // Items appended during iteration are not visited.
+            let list = PyList::new(py, [2, 3, 5, 7]).unwrap();
+            let seen = core::cell::RefCell::new(Vec::new());
+            list.locked_for_each(|el| {
+                seen.borrow_mut().push(el.extract::<i32>()?);
+                list.append(0)
+            })
+            .unwrap();
+            assert_eq!(seen.into_inner(), vec![2, 3, 5, 7]);
+            assert_eq!(list.len(), 8);
+
+            // Items removed during iteration shorten the iteration.
+            let list = PyList::new(py, [2, 3, 5, 7]).unwrap();
+            let seen = core::cell::RefCell::new(Vec::new());
+            list.locked_for_each(|el| {
+                seen.borrow_mut().push(el.extract::<i32>()?);
+                list.del_item(list.len() - 1)
+            })
+            .unwrap();
+            assert_eq!(seen.into_inner(), vec![2, 3]);
+            assert_eq!(list.extract::<Vec<i32>>().unwrap(), vec![2, 3]);
         });
     }
 
