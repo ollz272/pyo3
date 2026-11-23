@@ -183,15 +183,53 @@ class Foo:
     })
 }
 
+fn bench_call_1_unit(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let module = test_module!(py, "def foo(): pass");
+
+        let foo_module = &module.getattr("foo").unwrap();
+
+        b.iter(|| {
+            for _ in 0..1000 {
+                black_box(foo_module).call1(()).unwrap();
+            }
+        });
+    })
+}
+
+fn bench_call_method_1_unit(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let module = test_module!(
+            py,
+            "
+class Foo:
+    def foo(self):
+        pass
+"
+        );
+
+        let foo_module = &module.getattr("Foo").unwrap().call0().unwrap();
+        let meth = "foo".into_pyobject(py).unwrap();
+
+        b.iter(|| {
+            for _ in 0..1000 {
+                black_box(foo_module).call_method1(&meth, ()).unwrap();
+            }
+        });
+    })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("call_0", bench_call_0);
     c.bench_function("call_1", bench_call_1);
     c.bench_function("call", bench_call);
     c.bench_function("call_one_arg", bench_call_one_arg);
+    c.bench_function("call_1_unit", bench_call_1_unit);
     c.bench_function("call_method_0", bench_call_method_0);
     c.bench_function("call_method_1", bench_call_method_1);
     c.bench_function("call_method", bench_call_method);
     c.bench_function("call_method_one_arg", bench_call_method_one_arg);
+    c.bench_function("call_method_1_unit", bench_call_method_1_unit);
 }
 
 criterion_group!(benches, criterion_benchmark);

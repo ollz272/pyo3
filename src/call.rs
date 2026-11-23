@@ -91,10 +91,26 @@ impl<'py> PyCallArgs<'py> for () {
     fn call_positional(
         self,
         function: Borrowed<'_, 'py, PyAny>,
-        token: private::Token,
+        _: private::Token,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let args = self.into_pyobject_or_pyerr(function.py())?;
-        args.call_positional(function, token)
+        // SAFETY: `function` is a valid object pointer and the GIL/attached state is held
+        unsafe {
+            ffi::compat::PyObject_CallNoArgs(function.as_ptr()).assume_owned_or_err(function.py())
+        }
+    }
+
+    fn call_method_positional(
+        self,
+        object: Borrowed<'_, 'py, PyAny>,
+        method_name: Borrowed<'_, 'py, PyString>,
+        _: private::Token,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // SAFETY: `object` and `method_name` are valid object pointers and the
+        // GIL/attached state is held
+        unsafe {
+            ffi::compat::PyObject_CallMethodNoArgs(object.as_ptr(), method_name.as_ptr())
+                .assume_owned_or_err(object.py())
+        }
     }
 }
 
@@ -316,6 +332,89 @@ mod tests {
 
             // Borrowed<'_, '_, PyTuple>
             check_call!(args.as_borrowed(), kwargs);
+        })
+    }
+
+    #[test]
+    fn test_call_unit() {
+        use alloc::string::String;
+
+        use crate::{
+            Python,
+            exceptions::PyAttributeError,
+            ffi::c_str,
+            types::{PyAnyMethods, PyModule},
+        };
+
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                c_str!(
+                    "
+class Foo:
+    def method(self):
+        return ('method', self)
+
+    def __getattr__(self, name):
+        if name == 'dynamic':
+            return lambda: 'dynamic'
+        raise AttributeError(name)
+
+def func():
+    return 'func'
+
+def needs_arg(a):
+    pass
+"
+                ),
+                c_str!("test_call_unit.py"),
+                c_str!("test_call_unit"),
+            )
+            .unwrap();
+
+            // free function
+            let func = module.getattr("func").unwrap();
+            assert_eq!(func.call1(()).unwrap().extract::<String>().unwrap(), "func");
+            assert_eq!(
+                func.call((), None).unwrap().extract::<String>().unwrap(),
+                "func"
+            );
+
+            // errors from the callee still propagate
+            let needs_arg = module.getattr("needs_arg").unwrap();
+            assert!(needs_arg.call1(()).is_err());
+
+            // methods
+            let foo = module.getattr("Foo").unwrap().call0().unwrap();
+            let (name, this): (String, crate::Bound<'_, crate::PyAny>) =
+                foo.call_method1("method", ()).unwrap().extract().unwrap();
+            assert_eq!(name, "method");
+            assert!(this.is(&foo));
+            assert!(
+                foo.call_method("method", (), None)
+                    .unwrap()
+                    .extract::<(String, crate::Bound<'_, crate::PyAny>)>()
+                    .unwrap()
+                    .1
+                    .is(&foo)
+            );
+
+            // attribute lookup semantics (`__getattr__`) are preserved
+            assert_eq!(
+                foo.call_method1("dynamic", ())
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "dynamic"
+            );
+
+            // missing method raises AttributeError
+            let err = foo.call_method1("missing", ()).unwrap_err();
+            assert!(err.is_instance_of::<PyAttributeError>(py));
+
+            // non-callable attribute raises TypeError
+            let err = module.call_method1("__name__", ()).unwrap_err();
+            assert!(err.is_instance_of::<crate::exceptions::PyTypeError>(py));
         })
     }
 }
