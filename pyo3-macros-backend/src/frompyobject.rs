@@ -391,33 +391,53 @@ impl<'a> Container<'a> {
         for field in struct_fields {
             let ident = field.ident;
             let field_name = ident.unraw().to_string();
-            let getter = match field
+            // `getter` evaluates to `PyResult<Bound<PyAny>>`, `opt_getter` (used for
+            // `#[pyo3(default)]` fields) to `Option<Bound<PyAny>>`, `None` meaning "use the
+            // default"; the latter avoids creating an `AttributeError` / `KeyError` where possible.
+            let (getter, opt_getter) = match field
                 .getter
                 .as_ref()
                 .unwrap_or(&FieldGetter::GetAttr(parse_quote!(attribute), None))
             {
                 FieldGetter::GetAttr(_, Some(name)) => {
-                    quote!(#pyo3_path::types::PyAnyMethods::getattr(obj, #pyo3_path::intern!(obj.py(), #name)))
+                    let name = quote!(#pyo3_path::intern!(obj.py(), #name));
+                    (
+                        quote!(#pyo3_path::types::PyAnyMethods::getattr(obj, #name)),
+                        quote!(#pyo3_path::impl_::frompyobject::get_optional_attr(obj, #name)),
+                    )
                 }
                 FieldGetter::GetAttr(_, None) => {
                     let name = self
                         .rename_rule
                         .map(|rule| utils::apply_renaming_rule(rule, &field_name));
                     let name = name.as_deref().unwrap_or(&field_name);
-                    quote!(#pyo3_path::types::PyAnyMethods::getattr(obj, #pyo3_path::intern!(obj.py(), #name)))
+                    let name = quote!(#pyo3_path::intern!(obj.py(), #name));
+                    (
+                        quote!(#pyo3_path::types::PyAnyMethods::getattr(obj, #name)),
+                        quote!(#pyo3_path::impl_::frompyobject::get_optional_attr(obj, #name)),
+                    )
                 }
                 FieldGetter::GetItem(_, Some(syn::Lit::Str(key))) => {
-                    quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #pyo3_path::intern!(obj.py(), #key)))
+                    let key = quote!(#pyo3_path::intern!(obj.py(), #key));
+                    (
+                        quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #key)),
+                        quote!(#pyo3_path::impl_::frompyobject::get_optional_item(obj, #key)),
+                    )
                 }
-                FieldGetter::GetItem(_, Some(key)) => {
-                    quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #key))
-                }
+                FieldGetter::GetItem(_, Some(key)) => (
+                    quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #key)),
+                    quote!(#pyo3_path::impl_::frompyobject::get_optional_item(obj, #key)),
+                ),
                 FieldGetter::GetItem(_, None) => {
                     let name = self
                         .rename_rule
                         .map(|rule| utils::apply_renaming_rule(rule, &field_name));
                     let name = name.as_deref().unwrap_or(&field_name);
-                    quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #pyo3_path::intern!(obj.py(), #name)))
+                    let key = quote!(#pyo3_path::intern!(obj.py(), #name));
+                    (
+                        quote!(#pyo3_path::types::PyAnyMethods::get_item(obj, #key)),
+                        quote!(#pyo3_path::impl_::frompyobject::get_optional_item(obj, #key)),
+                    )
                 }
             };
             let extractor = if let Some(FromPyWithAttribute {
@@ -428,7 +448,7 @@ impl<'a> Container<'a> {
                 let extractor = quote_spanned! { kw.span =>
                     { let from_py_with: fn(_) -> _ = #expr_path; from_py_with }
                 };
-                quote! (#pyo3_path::impl_::frompyobject::extract_struct_field_with(#extractor, &#getter?, #struct_name, #field_name)?)
+                quote! (#pyo3_path::impl_::frompyobject::extract_struct_field_with(#extractor, &value, #struct_name, #field_name)?)
             } else {
                 quote!(#pyo3_path::impl_::frompyobject::extract_struct_field(&value, #struct_name, #field_name)?)
             };
@@ -438,7 +458,7 @@ impl<'a> Container<'a> {
                 } else {
                     quote!(::core::default::Default::default())
                 };
-                quote!(if let ::core::result::Result::Ok(value) = #getter {
+                quote!(if let ::core::option::Option::Some(value) = #opt_getter {
                     #extractor
                 } else {
                     #default_expr

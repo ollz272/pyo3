@@ -1,8 +1,9 @@
 use crate::Bound;
 use crate::platform::prelude::*;
+use crate::types::PyString;
 use crate::types::any::PyAnyMethods;
 use crate::{
-    FromPyObject, Py, PyAny, PyErr, PyErrArguments, PyResult, PyTypeInfo, Python,
+    FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyErrArguments, PyResult, PyTypeInfo, Python,
     exceptions::PyTypeError, ffi,
 };
 
@@ -44,6 +45,55 @@ fn extract_traceback(py: Python<'_>, mut error: PyErr) -> String {
         error = cause
     }
     error_msg
+}
+
+/// Looks up `obj.<attr_name>` for a `#[pyo3(default)]` field.
+///
+/// Returns `None` if the lookup fails for any reason, so that the caller falls back to the
+/// default value. A missing attribute does not create an `AttributeError` on Python 3.13+.
+#[inline]
+pub fn get_optional_attr<'py>(
+    obj: &Bound<'py, PyAny>,
+    attr_name: &Bound<'py, PyString>,
+) -> Option<Bound<'py, PyAny>> {
+    obj.getattr_opt(attr_name).ok().flatten()
+}
+
+/// Looks up `obj[key]` for a `#[pyo3(default)]` field.
+///
+/// Returns `None` if the lookup fails for any reason, so that the caller falls back to the
+/// default value. A missing key does not create a `KeyError` for exact `dict`s on Python 3.13+.
+#[inline]
+pub fn get_optional_item<'py, K>(obj: &Bound<'py, PyAny>, key: K) -> Option<Bound<'py, PyAny>>
+where
+    K: IntoPyObject<'py>,
+{
+    #[cfg(Py_3_13)]
+    {
+        use crate::ffi_ptr_ext::FfiPtrExt;
+        use crate::{BoundObject, IntoPyObjectExt, ffi};
+
+        let py = obj.py();
+        let key = key.into_pyobject_or_pyerr(py).ok()?;
+        let mut result: *mut ffi::PyObject = core::ptr::null_mut();
+        // SAFETY: `obj` and `key` are valid objects and we are attached to the interpreter;
+        // `result` is a valid out-pointer.
+        match unsafe { ffi::PyMapping_GetOptionalItem(obj.as_ptr(), key.as_ptr(), &mut result) } {
+            // SAFETY: on success `result` is a new (non-null) strong reference
+            1 => Some(unsafe { result.assume_owned_unchecked(py) }),
+            // Item not found (KeyError suppressed)
+            0 => None,
+            // Some other error occurred; fetch it (which re-raises Rust panics) and discard it
+            _ => {
+                drop(PyErr::fetch(py));
+                None
+            }
+        }
+    }
+    #[cfg(not(Py_3_13))]
+    {
+        obj.get_item(key).ok()
+    }
 }
 
 pub fn extract_struct_field<'a, 'py, T>(

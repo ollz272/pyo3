@@ -883,6 +883,207 @@ fn test_with_default_item_enum() {
 }
 
 #[test]
+fn test_default_fields_fall_back_on_any_lookup_error() {
+    #[derive(Debug, FromPyObject, PartialEq, Eq)]
+    struct Items {
+        #[pyo3(item)]
+        required: usize,
+        #[pyo3(item, default = 7)]
+        missing: usize,
+        #[pyo3(item, default = 8)]
+        raises: usize,
+        #[pyo3(item(0), default = 9)]
+        int_key: usize,
+    }
+
+    #[derive(Debug, FromPyObject, PartialEq, Eq)]
+    struct Attrs {
+        required: usize,
+        #[pyo3(default = 7)]
+        missing: usize,
+        #[pyo3(default = 8)]
+        raises: usize,
+        #[pyo3(default)]
+        present: usize,
+    }
+
+    Python::attach(|py| {
+        let locals = PyDict::new(py);
+        py.run(
+            cr#"
+class Mapping:
+    def __getitem__(self, key):
+        if key == "required":
+            return 0
+        if key == "raises":
+            raise ValueError(key)
+        raise KeyError(key)
+
+class DictWithMissing(dict):
+    def __missing__(self, key):
+        return 5
+
+class Plain:
+    required = 0
+
+class Obj:
+    required = 0
+    present = 3
+    def __getattr__(self, name):
+        if name == "raises":
+            raise ValueError(name)
+        raise AttributeError(name)
+"#,
+            None,
+            Some(&locals),
+        )
+        .unwrap();
+        let construct = |name: &str| locals.get_item(name).unwrap().unwrap().call0().unwrap();
+
+        // exact dict, all keys absent
+        let dict = PyDict::new(py);
+        dict.set_item("required", 0).unwrap();
+        let expected = Items {
+            required: 0,
+            missing: 7,
+            raises: 8,
+            int_key: 9,
+        };
+        assert_eq!(dict.extract::<Items>().unwrap(), expected);
+
+        // exact dict, all keys present
+        dict.set_item("missing", 1).unwrap();
+        dict.set_item("raises", 2).unwrap();
+        dict.set_item(0, 3).unwrap();
+        let expected = Items {
+            required: 0,
+            missing: 1,
+            raises: 2,
+            int_key: 3,
+        };
+        assert_eq!(dict.extract::<Items>().unwrap(), expected);
+
+        // non-dict mapping raising KeyError and other errors
+        let expected = Items {
+            required: 0,
+            missing: 7,
+            raises: 8,
+            int_key: 9,
+        };
+        assert_eq!(construct("Mapping").extract::<Items>().unwrap(), expected);
+
+        // dict subclass: `__missing__` is still honoured
+        let expected = Items {
+            required: 5,
+            missing: 5,
+            raises: 5,
+            int_key: 5,
+        };
+        assert_eq!(
+            construct("DictWithMissing").extract::<Items>().unwrap(),
+            expected
+        );
+
+        // `__getattr__` raising AttributeError and other errors
+        let expected = Attrs {
+            required: 0,
+            missing: 7,
+            raises: 8,
+            present: 3,
+        };
+        assert_eq!(construct("Obj").extract::<Attrs>().unwrap(), expected);
+
+        // generic attribute lookup, all attributes absent
+        let expected = Attrs {
+            required: 0,
+            missing: 7,
+            raises: 8,
+            present: 0,
+        };
+        assert_eq!(construct("Plain").extract::<Attrs>().unwrap(), expected);
+
+        assert!(PyErr::take(py).is_none());
+    });
+}
+
+#[test]
+fn test_default_item_field_lookup_panic_is_resumed() {
+    #[pyclass]
+    struct Panics;
+
+    #[pymethods]
+    impl Panics {
+        fn __getitem__(&self, _key: Bound<'_, PyAny>) -> usize {
+            panic!("lookup panicked")
+        }
+    }
+
+    #[derive(Debug, FromPyObject)]
+    struct Items {
+        #[pyo3(attribute("__class__"))]
+        _class: Py<PyAny>,
+        #[pyo3(item, default)]
+        _field: usize,
+    }
+
+    Python::attach(|py| {
+        let obj = Py::new(py, Panics).unwrap().into_bound(py).into_any();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = obj.extract::<Items>();
+        }));
+        assert!(result.is_err());
+    });
+}
+
+#[test]
+fn test_from_py_with_field_is_looked_up_once() {
+    #[derive(Debug, FromPyObject, PartialEq, Eq)]
+    struct Fields {
+        #[pyo3(item, from_py_with = Bound::<'_, PyAny>::len)]
+        a: usize,
+        #[pyo3(item, default, from_py_with = Bound::<'_, PyAny>::len)]
+        b: usize,
+        #[pyo3(from_py_with = Bound::<'_, PyAny>::len)]
+        c: usize,
+        #[pyo3(default, from_py_with = Bound::<'_, PyAny>::len)]
+        d: usize,
+    }
+
+    Python::attach(|py| {
+        let locals = PyDict::new(py);
+        py.run(
+            cr#"
+class Counting:
+    def __init__(self):
+        self.calls = []
+    def __getitem__(self, key):
+        self.calls.append(key)
+        return (1, 2)
+    def __getattr__(self, name):
+        self.calls.append(name)
+        return (1, 2, 3)
+
+obj = Counting()
+"#,
+            None,
+            Some(&locals),
+        )
+        .unwrap();
+        let obj = locals.get_item("obj").unwrap().unwrap();
+
+        let expected = Fields {
+            a: 2,
+            b: 2,
+            c: 3,
+            d: 3,
+        };
+        assert_eq!(obj.extract::<Fields>().unwrap(), expected);
+        let calls: Vec<String> = obj.getattr("calls").unwrap().extract().unwrap();
+        assert_eq!(calls, ["a", "b", "c", "d"]);
+    });
+}
+
+#[test]
 fn test_from_py_object_interns_keys() {
     #[pyclass]
     struct Echo;

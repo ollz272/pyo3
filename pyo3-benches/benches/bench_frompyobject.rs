@@ -228,6 +228,67 @@ fn smallvec_bytes_from_py_bytearray_spilled(b: &mut Bencher<'_>) {
     bench_smallvec_from_py_bytearray::<[u8; 8]>(b, &[7u8; 32]);
 }
 
+#[derive(FromPyObject)]
+#[pyo3(from_item_all)]
+#[expect(dead_code)]
+struct ItemsWithDefaults {
+    a: i32,
+    #[pyo3(default)]
+    b: Option<i32>,
+    #[pyo3(default)]
+    c: Option<i32>,
+}
+
+fn struct_items_default_fields_absent(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = py.eval(c"{'a': 1}", None, None).unwrap();
+
+        b.iter(|| black_box(&any).extract::<ItemsWithDefaults>().unwrap());
+    })
+}
+
+#[derive(FromPyObject)]
+#[expect(dead_code)]
+struct AttrsWithDefaults {
+    a: i32,
+    #[pyo3(default)]
+    b: Option<i32>,
+    #[pyo3(default)]
+    c: Option<i32>,
+}
+
+fn struct_attrs_default_fields_absent(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = py
+            .eval(c"__import__('types').SimpleNamespace(a=1)", None, None)
+            .unwrap();
+
+        b.iter(|| black_box(&any).extract::<AttrsWithDefaults>().unwrap());
+    })
+}
+
+fn extract_i32(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
+    obj.extract()
+}
+
+#[derive(FromPyObject)]
+#[pyo3(from_item_all)]
+#[expect(dead_code)]
+struct ItemsFromPyWith {
+    #[pyo3(from_py_with = extract_i32)]
+    a: i32,
+    #[pyo3(from_py_with = extract_i32)]
+    b: i32,
+}
+
+fn struct_items_from_py_with(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let any = py.eval(c"{'a': 1, 'b': 2}", None, None).unwrap();
+
+        b.iter(|| black_box(&any).extract::<ItemsFromPyWith>().unwrap());
+    })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("array_small_from_py_list", array_small_from_py_list);
     c.bench_function("array_large_from_py_list", array_large_from_py_list);
@@ -240,6 +301,16 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("enum_from_pyobject", enum_from_pyobject);
     c.bench_function("vec_enum_from_pyobject", vec_enum_from_pyobject);
+
+    c.bench_function(
+        "struct_items_default_fields_absent",
+        struct_items_default_fields_absent,
+    );
+    c.bench_function(
+        "struct_attrs_default_fields_absent",
+        struct_attrs_default_fields_absent,
+    );
+    c.bench_function("struct_items_from_py_with", struct_items_from_py_with);
 
     c.bench_function("list_via_cast", list_via_cast);
 
