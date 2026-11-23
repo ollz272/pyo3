@@ -743,6 +743,10 @@ mod slow_128bit_int_conversion {
                 const OUTPUT_TYPE: PyStaticExpr = PyInt::TYPE_HINT;
 
                 fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+                    // Fast path: values which fit in 64 bits need a single C-API call.
+                    if let Ok(small) = <$half_type>::try_from(self) {
+                        return small.into_pyobject(py);
+                    }
                     let lower = (self as u64).into_pyobject(py)?;
                     let upper = ((self >> SHIFT) as $half_type).into_pyobject(py)?;
                     let shift = SHIFT.into_pyobject(py)?;
@@ -779,6 +783,20 @@ mod slow_128bit_int_conversion {
 
                 fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<$rust_type, Self::Error> {
                     let py = ob.py();
+                    // Fast path: for `int` objects whose value fits in an `i64`, a single
+                    // C-API call suffices. Anything else falls through to the general path.
+                    if ob.cast::<PyInt>().is_ok() {
+                        let mut overflow = 0;
+                        let v = unsafe {
+                            ffi::PyLong_AsLongLongAndOverflow(ob.as_ptr(), &mut overflow)
+                        };
+                        if overflow == 0 {
+                            // for `int` objects with `overflow == 0` the call cannot fail
+                            if let Some(small) = try_from_i64::<$rust_type>(v) {
+                                return Ok(small);
+                            }
+                        }
+                    }
                     unsafe {
                         let lower = err_if_invalid_value(
                             py,
@@ -800,6 +818,12 @@ mod slow_128bit_int_conversion {
 
     int_convert_128!(i128, i64);
     int_convert_128!(u128, u64);
+}
+
+#[cfg(all(Py_LIMITED_API, not(Py_3_15)))]
+#[inline]
+fn try_from_i64<T: TryFrom<i64>>(v: i64) -> Option<T> {
+    T::try_from(v).ok()
 }
 
 fn err_if_invalid_value<T: PartialEq>(
@@ -1010,6 +1034,85 @@ mod test_128bit_integers {
             let obj = py.eval(c"-1", None, None).unwrap();
             let err = obj.extract::<u128>().unwrap_err();
             assert!(err.is_instance_of::<exceptions::PyValueError>(py));
+        })
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_128bit_64bit_boundaries() {
+        Python::attach(|py| {
+            let i_values: [i128; 10] = [
+                0,
+                1,
+                -1,
+                i64::MAX as i128,
+                i64::MAX as i128 + 1,
+                i64::MIN as i128,
+                i64::MIN as i128 - 1,
+                u64::MAX as i128,
+                u64::MAX as i128 + 1,
+                -(u64::MAX as i128),
+            ];
+            for v in i_values {
+                let obj = v.into_pyobject(py).unwrap();
+                let expected = py
+                    .eval(&CString::new(v.to_string()).unwrap(), None, None)
+                    .unwrap();
+                assert!(obj.as_any().eq(&expected).unwrap());
+                assert_eq!(obj.extract::<i128>().unwrap(), v);
+            }
+            let u_values: [u128; 6] = [
+                0,
+                1,
+                i64::MAX as u128,
+                i64::MAX as u128 + 1,
+                u64::MAX as u128,
+                u64::MAX as u128 + 1,
+            ];
+            for v in u_values {
+                let obj = v.into_pyobject(py).unwrap();
+                let expected = py
+                    .eval(&CString::new(v.to_string()).unwrap(), None, None)
+                    .unwrap();
+                assert!(obj.as_any().eq(&expected).unwrap());
+                assert_eq!(obj.extract::<u128>().unwrap(), v);
+            }
+        })
+    }
+
+    #[test]
+    fn test_128bit_extract_negative_to_unsigned() {
+        Python::attach(|py| {
+            for src in [c"-1", c"-(2**63)", c"-(2**64)"] {
+                let obj = py.eval(src, None, None).unwrap();
+                assert!(obj.extract::<u128>().is_err());
+            }
+        })
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_128bit_extract_int_subclass() {
+        Python::attach(|py| {
+            let code = c"
+class MyInt(int):
+    def __index__(self):
+        return 7
+result = (MyInt(42), MyInt(-3))
+";
+            let globals = PyDict::new(py);
+            py.run(code, Some(&globals), None).unwrap();
+            let (sub, neg): (Bound<'_, PyAny>, Bound<'_, PyAny>) = globals
+                .get_item("result")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            // int subclasses use the underlying int value (as PyLong_As* do)
+            assert_eq!(sub.extract::<i128>().unwrap(), 42);
+            assert_eq!(sub.extract::<u128>().unwrap(), 42);
+            assert_eq!(neg.extract::<i128>().unwrap(), -3);
+            assert!(neg.extract::<u128>().is_err());
         })
     }
 
