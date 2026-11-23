@@ -88,10 +88,19 @@ where
     // Subclasses may override `__iter__`, so they take the generic path below.
     if let Ok(list) = obj.cast_exact::<PyList>() {
         let mut v = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            v.push(item.extract::<T>().map_err(Into::into)?);
-        }
-        return Ok(v);
+        // `find_map` is specialised on free-threaded builds to hold the list's critical
+        // section for the whole loop, rather than taking it once per element as `next` does.
+        let err = list.iter().find_map(|item| match item.extract::<T>() {
+            Ok(x) => {
+                v.push(x);
+                None
+            }
+            Err(e) => Some(e.into()),
+        });
+        return match err {
+            Some(err) => Err(err),
+            None => Ok(v),
+        };
     }
     if let Ok(tuple) = obj.cast_exact::<PyTuple>() {
         let mut v = Vec::with_capacity(tuple.len());
@@ -193,6 +202,45 @@ mod tests {
             assert!(obj.extract::<Vec<i32>>().is_err());
             let obj = py.eval(c"(1, 'a')", None, None).unwrap();
             assert!(obj.extract::<Vec<i32>>().is_err());
+
+            // the first failing element's error is returned
+            let obj = py.eval(c"[1, 'a', None]", None, None).unwrap();
+            let err = obj.extract::<Vec<i32>>().unwrap_err();
+            assert!(err.to_string().contains("'str'"), "{err}");
+
+            // nested lists (nested critical sections on free-threaded builds)
+            let v: Vec<Vec<i32>> = py
+                .eval(c"[[1, 2], [], [3]]", None, None)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(v, [vec![1, 2], vec![], vec![3]]);
+        });
+    }
+
+    #[test]
+    fn test_extract_list_to_vec_mutated_during_extraction() {
+        Python::attach(|py| {
+            // element extraction runs Python code (`__index__`) which mutates the list being
+            // extracted; this must neither deadlock nor read past the list's current length
+            let globals = crate::types::PyDict::new(py);
+            py.run(
+                c"
+class ClearsList:
+    def __index__(self):
+        l.clear()
+        return 1
+
+l = []
+l.extend([ClearsList(), 2, 3])
+",
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+            let l = globals.as_any().get_item("l").unwrap();
+            let v: Vec<i32> = l.extract().unwrap();
+            assert_eq!(v, [1]);
         });
     }
 

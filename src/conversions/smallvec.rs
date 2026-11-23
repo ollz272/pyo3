@@ -97,10 +97,21 @@ where
     // Subclasses may override `__iter__`, so they take the generic path below.
     if let Ok(list) = obj.cast_exact::<PyList>() {
         let mut sv = SmallVec::with_capacity(list.len());
-        for item in list.iter() {
-            sv.push(item.extract::<A::Item>().map_err(Into::into)?);
-        }
-        return Ok(sv);
+        // `find_map` is specialised on free-threaded builds to hold the list's critical
+        // section for the whole loop, rather than taking it once per element as `next` does.
+        let err = list
+            .iter()
+            .find_map(|item| match item.extract::<A::Item>() {
+                Ok(x) => {
+                    sv.push(x);
+                    None
+                }
+                Err(e) => Some(e.into()),
+            });
+        return match err {
+            Some(err) => Err(err),
+            None => Ok(sv),
+        };
     }
     if let Ok(tuple) = obj.cast_exact::<PyTuple>() {
         let mut sv = SmallVec::with_capacity(tuple.len());
@@ -136,6 +147,11 @@ mod tests {
             let l = PyList::new(py, [1, 2, 3, 4, 5]).unwrap();
             let sv: SmallVec<[u64; 8]> = l.extract().unwrap();
             assert_eq!(sv.as_slice(), [1, 2, 3, 4, 5]);
+
+            // errors from extracting elements of a list are propagated
+            let l = PyList::new(py, [1, -1, 3]).unwrap();
+            let sv: PyResult<SmallVec<[u64; 8]>> = l.extract();
+            assert!(sv.is_err());
         });
     }
 
