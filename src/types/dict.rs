@@ -704,6 +704,33 @@ impl<'py> BoundDictIterator<'py> {
             },
         }
     }
+
+    /// Calls `f` on each remaining item, stopping at the first error.
+    ///
+    /// On the free-threaded build the dict is locked with a single critical section for the
+    /// whole loop, rather than one per item as `next` does.
+    #[inline]
+    pub(crate) fn try_for_each_locked<F>(mut self, mut f: F) -> PyResult<()>
+    where
+        F: FnMut(Bound<'py, PyAny>, Bound<'py, PyAny>) -> PyResult<()>,
+    {
+        #[cfg(Py_GIL_DISABLED)]
+        {
+            self.inner.with_critical_section(&self.dict, |inner| {
+                while let Some((key, value)) = unsafe { inner.next_unchecked(&self.dict) } {
+                    f(key, value)?;
+                }
+                Ok(())
+            })
+        }
+        #[cfg(not(Py_GIL_DISABLED))]
+        {
+            for (key, value) in &mut self {
+                f(key, value)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 impl<'py> IntoIterator for Bound<'py, PyDict> {
@@ -1696,6 +1723,50 @@ mod tests {
                     .try_fold(0, |acc, (_, v)| PyResult::Ok(acc + v.extract::<i32>()?))
                     .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn test_iter_try_for_each_locked() {
+        Python::attach(|py| {
+            let dict = [(1, 1), (2, 2), (3, 3)].into_py_dict(py).unwrap();
+            let mut sum = 0;
+            dict.iter()
+                .try_for_each_locked(|k, v| {
+                    sum += k.extract::<i32>()? * v.extract::<i32>()?;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(sum, 14);
+
+            // stops at the first error
+            let dict = PyDict::new(py);
+            dict.set_item(1, 1).unwrap();
+            dict.set_item(2, "foo").unwrap();
+            dict.set_item(3, 3).unwrap();
+            let mut calls = 0;
+            let err = dict
+                .iter()
+                .try_for_each_locked(|_, v| {
+                    calls += 1;
+                    v.extract::<i32>()?;
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(err.is_instance_of::<crate::exceptions::PyTypeError>(py));
+            assert_eq!(calls, 2);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "dictionary changed size during iteration")]
+    fn test_iter_try_for_each_locked_key_mutated() {
+        Python::attach(|py| {
+            let dict = [(1, 1), (2, 2), (3, 3)].into_py_dict(py).unwrap();
+            let _ = dict.iter().try_for_each_locked(|k, _| {
+                dict.set_item(k.extract::<i32>()? + 10, 0)?;
+                Ok(())
+            });
         });
     }
 

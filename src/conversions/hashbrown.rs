@@ -91,12 +91,13 @@ where
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, PyErr> {
         let dict = ob.cast::<PyDict>()?;
         let mut ret = hashbrown::HashMap::with_capacity_and_hasher(dict.len(), S::default());
-        for (k, v) in dict.iter() {
+        dict.iter().try_for_each_locked(|k, v| {
             ret.insert(
                 k.extract().map_err(Into::into)?,
                 v.extract().map_err(Into::into)?,
             );
-        }
+            Ok(())
+        })?;
         Ok(ret)
     }
 }

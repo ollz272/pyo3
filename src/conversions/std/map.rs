@@ -124,12 +124,13 @@ where
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         let dict = ob.cast::<PyDict>()?;
         let mut ret = std::collections::HashMap::with_capacity_and_hasher(dict.len(), S::default());
-        for (k, v) in dict.iter() {
+        dict.iter().try_for_each_locked(|k, v| {
             ret.insert(
                 k.extract().map_err(Into::into)?,
                 v.extract().map_err(Into::into)?,
             );
-        }
+            Ok(())
+        })?;
         Ok(ret)
     }
 }
@@ -148,12 +149,13 @@ where
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, PyErr> {
         let dict = ob.cast::<PyDict>()?;
         let mut pairs = Vec::with_capacity(dict.len());
-        for (k, v) in dict.iter() {
+        dict.iter().try_for_each_locked(|k, v| {
             pairs.push((
                 k.extract().map_err(Into::into)?,
                 v.extract().map_err(Into::into)?,
             ));
-        }
+            Ok(())
+        })?;
         Ok(pairs.into_iter().collect())
     }
 }
@@ -277,6 +279,28 @@ mod tests {
 
             // not a dict
             assert!(py.None().bind(py).extract::<BTreeMap<i32, i32>>().is_err());
+        });
+    }
+
+    #[test]
+    #[cfg(wip_feature_std)]
+    fn test_hashmap_extract() {
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            assert!(dict.extract::<HashMap<i32, i32>>().unwrap().is_empty());
+
+            for k in [5, 1, 4, 2, 3] {
+                dict.set_item(k, k * 10).unwrap();
+            }
+            let map = dict.extract::<HashMap<i32, i32>>().unwrap();
+            assert_eq!(map, (1..=5).map(|k| (k, k * 10)).collect());
+
+            // errors in a key or a value are propagated
+            assert!(dict.extract::<HashMap<String, i32>>().is_err());
+            assert!(dict.extract::<HashMap<i32, String>>().is_err());
+
+            // not a dict
+            assert!(py.None().bind(py).extract::<HashMap<i32, i32>>().is_err());
         });
     }
 }
