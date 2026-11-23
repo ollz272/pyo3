@@ -1294,23 +1294,40 @@ fn extract_object(
             { let from_py_with: fn(_) -> _ = #extractor; from_py_with }
         };
 
-        quote! {
-            #pyo3_path::impl_::extract_argument::from_py_with(
-                unsafe { #pyo3_path::Bound::#ref_from_method(py, &#source_ptr) },
-                #name,
-                #extractor,
-            )
+        let obj = quote! { unsafe { #pyo3_path::Bound::#ref_from_method(py, &#source_ptr) } };
+        match extract_error_mode {
+            ExtractErrorMode::Raise => quote! {
+                #pyo3_path::impl_::extract_argument::from_py_with(#obj, #name, #extractor)
+            },
+            // The error is discarded in favour of `NotImplemented`, so don't annotate it.
+            ExtractErrorMode::NotImplemented => quote! {
+                #pyo3_path::impl_::extract_argument::from_py_with_or_not_implemented(
+                    #obj,
+                    #extractor,
+                )
+            },
         }
     } else {
         let holder = holders.push_holder(Span::call_site());
+        let obj = quote! {
+            unsafe { #pyo3_path::impl_::extract_argument::#cast_method(py, #source_ptr) }
+        };
+        let call = match extract_error_mode {
+            ExtractErrorMode::Raise => quote! {
+                #pyo3_path::impl_::extract_argument::extract_argument(#obj, &mut #holder, #name)
+            },
+            // The error is discarded in favour of `NotImplemented`, so don't annotate it.
+            ExtractErrorMode::NotImplemented => quote! {
+                #pyo3_path::impl_::extract_argument::extract_argument_or_not_implemented(
+                    #obj,
+                    &mut #holder,
+                )
+            },
+        };
         quote! {{
             #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
             use #pyo3_path::impl_::pyclass::Probe as _;
-            #pyo3_path::impl_::extract_argument::extract_argument(
-                unsafe { #pyo3_path::impl_::extract_argument::#cast_method(py, #source_ptr) },
-                &mut #holder,
-                #name
-            )
+            #call
         }}
     };
 

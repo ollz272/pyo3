@@ -366,6 +366,28 @@ where
     }
 }
 
+/// Variant of [`extract_argument`] used by slots which return `NotImplemented` when the
+/// argument cannot be extracted (e.g. `__eq__`, `__add__`).
+///
+/// The caller discards the error, so this skips annotating it with the argument name (which
+/// would otherwise normalize the error and call `add_note` on it for nothing).
+#[inline]
+pub fn extract_argument_or_not_implemented<
+    'a,
+    'holder,
+    'py,
+    T,
+    const IMPLEMENTS_FROMPYOBJECT: bool,
+>(
+    obj: Borrowed<'a, 'py, PyAny>,
+    holder: &'holder mut T::Holder,
+) -> Result<T, T::Error>
+where
+    T: PyFunctionArgument<'a, 'holder, 'py, IMPLEMENTS_FROMPYOBJECT>,
+{
+    PyFunctionArgument::extract(obj, holder)
+}
+
 /// Fused unwrap + [`extract_argument`], used for required arguments to keep the generated
 /// code small.
 ///
@@ -414,6 +436,17 @@ pub fn from_py_with<'a, 'py, T>(
         Ok(value) => Ok(value),
         Err(e) => Err(argument_extraction_error(obj.py(), arg_name, e)),
     }
+}
+
+/// Variant of [`from_py_with`] used by slots which return `NotImplemented` when the argument
+/// cannot be extracted; as with [`extract_argument_or_not_implemented`], the caller discards
+/// the error, so it is not annotated with the argument name.
+#[inline]
+pub fn from_py_with_or_not_implemented<'a, 'py, T>(
+    obj: &'a Bound<'py, PyAny>,
+    extractor: fn(&'a Bound<'py, PyAny>) -> PyResult<T>,
+) -> PyResult<T> {
+    extractor(obj)
 }
 
 /// Fused unwrap + [`from_py_with`], used for required arguments with a

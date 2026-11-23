@@ -800,4 +800,71 @@ mod return_not_implemented {
         _test_inplace_binary_operator("%=", "imod");
         _test_inplace_binary_operator("**=", "ipow");
     }
+
+    /// Fails extraction by raising the operand itself, so a test can see whether the
+    /// (discarded) error was annotated with the argument name.
+    struct RaiseOperand;
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for RaiseOperand {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            Err(PyErr::from_value(obj.to_owned()))
+        }
+    }
+
+    fn raise_operand(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+        Err(PyErr::from_value(obj.clone()))
+    }
+
+    #[pyclass]
+    struct ExtractionFailure;
+
+    #[pymethods]
+    impl ExtractionFailure {
+        fn __eq__(&self, _other: RaiseOperand) -> bool {
+            unreachable!()
+        }
+
+        fn __add__(&self, #[pyo3(from_py_with = raise_operand)] _other: i64) -> i64 {
+            unreachable!()
+        }
+
+        fn method(&self, _other: RaiseOperand) {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn extraction_error_is_not_annotated() {
+        Python::attach(|py| {
+            let c = Py::new(py, ExtractionFailure).unwrap();
+            py_run!(
+                py,
+                c,
+                r#"
+import sys
+
+e = ValueError()
+assert c.__eq__(e) is NotImplemented
+assert not hasattr(e, "__notes__")
+
+e = ValueError()
+assert c.__add__(e) is NotImplemented
+assert not hasattr(e, "__notes__")
+
+# Methods which raise still annotate the error with the argument name.
+e = ValueError()
+try:
+    c.method(e)
+except ValueError as raised:
+    assert raised is e
+else:
+    raise AssertionError("expected ValueError")
+if sys.version_info >= (3, 11):
+    assert e.__notes__ == ["while processing '_other'"], e.__notes__
+"#
+            );
+        });
+    }
 }
