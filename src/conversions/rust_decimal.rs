@@ -73,7 +73,12 @@ impl FromPyObject<'_, '_> for Decimal {
 
     fn extract(obj: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
         // use the string representation to not be lossy
-        if let Ok(val) = obj.extract() {
+        // Only attempt the integer path for objects implementing `__index__`; for anything else
+        // (notably every `decimal.Decimal`) the i64 extraction is guaranteed to fail with a
+        // `TypeError` that would be created and then immediately discarded.
+        // SAFETY: `obj` is a valid, non-null Python object pointer.
+        let has_index = unsafe { crate::ffi::PyIndex_Check(obj.as_ptr()) } != 0;
+        if let Some(val) = has_index.then(|| obj.extract::<i64>().ok()).flatten() {
             Ok(Decimal::new(val, 0))
         } else {
             let py_str = &obj.str()?;
@@ -233,6 +238,58 @@ mod test_rust_decimal {
             let roundtripped: Decimal = py_dec.extract().unwrap();
             let rs_dec = Decimal::from_scientific("1e3").unwrap();
             assert_eq!(rs_dec, roundtripped);
+        })
+    }
+
+    #[test]
+    fn test_index_and_non_index_inputs() {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import decimal
+class Idx:
+    def __index__(self):
+        return 42
+    def __str__(self):
+        return 'not used'
+class DecIdx(decimal.Decimal):
+    def __index__(self):
+        return 7
+class Plain:
+    def __str__(self):
+        return '1.5'
+big = 2**70
+dec = decimal.Decimal('12345.6789')
+",
+                None,
+                Some(&locals),
+            )
+            .unwrap();
+            let get = |name: &str| locals.get_item(name).unwrap().unwrap();
+            let extract = |obj: &crate::Bound<'_, crate::PyAny>| obj.extract::<Decimal>();
+
+            // `__index__` fast path is still taken
+            assert_eq!(
+                extract(&get("Idx").call0().unwrap()).unwrap(),
+                Decimal::new(42, 0)
+            );
+            // `__index__` present but not Decimal-like: i64 path wins, as before
+            assert_eq!(
+                extract(&get("DecIdx").call1(("3.5",)).unwrap()).unwrap(),
+                Decimal::new(7, 0)
+            );
+            // int too large for i64 falls back to the string path
+            assert_eq!(
+                extract(&get("big")).unwrap(),
+                Decimal::from_str("1180591620717411303424").unwrap()
+            );
+            // no `__index__`: string path
+            assert_eq!(
+                extract(&get("Plain").call0().unwrap()).unwrap(),
+                Decimal::new(15, 1)
+            );
+            assert_eq!(extract(&get("dec")).unwrap(), Decimal::new(123456789, 4));
         })
     }
 
