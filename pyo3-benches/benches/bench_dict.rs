@@ -80,6 +80,30 @@ fn extract_btreemap(b: &mut Bencher<'_>) {
     });
 }
 
+fn extract_btreemap_small(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let dict = (0..3u64)
+            .map(|i| (i, i * 2))
+            .into_py_dict(py)
+            .unwrap()
+            .into_any();
+        b.iter(|| BTreeMap::<u64, u64>::extract(dict.as_borrowed()));
+    });
+}
+
+fn extract_btreemap_shuffled(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        const LEN: u64 = 100_000;
+        // deterministic pseudo-random permutation of 0..LEN (multiplier coprime to LEN)
+        let dict = (0..LEN)
+            .map(|i| ((i * 7919) % LEN, i))
+            .into_py_dict(py)
+            .unwrap()
+            .into_any();
+        b.iter(|| BTreeMap::<u64, u64>::extract(dict.as_borrowed()));
+    });
+}
+
 fn extract_hashbrown_map(b: &mut Bencher<'_>) {
     Python::attach(|py| {
         const LEN: usize = 100_000;
@@ -109,6 +133,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("dict_get_item", dict_get_item);
     c.bench_function("extract_hashmap", extract_hashmap);
     c.bench_function("extract_btreemap", extract_btreemap);
+    c.bench_function("extract_btreemap_small", extract_btreemap_small);
+    c.bench_function("extract_btreemap_shuffled", extract_btreemap_shuffled);
     c.bench_function("mapping_from_dict", mapping_from_dict);
     c.bench_function("extract_hashbrown_map", extract_hashbrown_map);
 }

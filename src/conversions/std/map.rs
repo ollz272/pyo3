@@ -8,6 +8,7 @@ use crate::{
     instance::Bound,
     types::{PyDict, any::PyAnyMethods, dict::PyDictMethods},
 };
+use alloc::vec::Vec;
 
 use core::cmp;
 #[cfg(wip_feature_std)]
@@ -146,14 +147,14 @@ where
 
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, PyErr> {
         let dict = ob.cast::<PyDict>()?;
-        let mut ret = alloc::collections::BTreeMap::new();
+        let mut pairs = Vec::with_capacity(dict.len());
         for (k, v) in dict.iter() {
-            ret.insert(
+            pairs.push((
                 k.extract().map_err(Into::into)?,
                 v.extract().map_err(Into::into)?,
-            );
+            ));
         }
-        Ok(ret)
+        Ok(pairs.into_iter().collect())
     }
 }
 
@@ -161,6 +162,7 @@ where
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
+    use alloc::string::String;
     #[cfg(wip_feature_std)]
     use std::collections::HashMap;
 
@@ -249,6 +251,32 @@ mod tests {
                     .unwrap()
                     == 1
             );
+        });
+    }
+
+    #[test]
+    fn test_btreemap_extract() {
+        Python::attach(|py| {
+            // empty
+            let dict = PyDict::new(py);
+            assert!(dict.extract::<BTreeMap<i32, i32>>().unwrap().is_empty());
+
+            // unsorted insertion order produces a sorted map
+            for k in [5, 1, 4, 2, 3] {
+                dict.set_item(k, k * 10).unwrap();
+            }
+            let map = dict.extract::<BTreeMap<i32, i32>>().unwrap();
+            assert_eq!(
+                map.into_iter().collect::<Vec<_>>(),
+                [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]
+            );
+
+            // errors in a key or a value are propagated
+            assert!(dict.extract::<BTreeMap<String, i32>>().is_err());
+            assert!(dict.extract::<BTreeMap<i32, String>>().is_err());
+
+            // not a dict
+            assert!(py.None().bind(py).extract::<BTreeMap<i32, i32>>().is_err());
         });
     }
 }
