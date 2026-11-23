@@ -429,12 +429,18 @@ impl PyDateTime {
         }
 
         #[cfg(Py_LIMITED_API)]
-        Ok(Self::type_object(py)
-            .call(
-                (year, month, day, hour, minute, second, microsecond, tzinfo),
-                Some(&[("fold", fold)].into_py_dict(py)?),
-            )?
-            .cast_into()?)
+        {
+            let args = (year, month, day, hour, minute, second, microsecond, tzinfo);
+            // `fold` defaults to 0, so only build the kwargs dict when it is set.
+            let kwargs = if fold {
+                Some([(intern!(py, "fold"), true)].into_py_dict(py)?)
+            } else {
+                None
+            };
+            Ok(Self::type_object(py)
+                .call(args, kwargs.as_ref())?
+                .cast_into()?)
+        }
     }
 
     /// Construct a `datetime` object from a POSIX timestamp
@@ -695,12 +701,18 @@ impl PyTime {
         }
 
         #[cfg(Py_LIMITED_API)]
-        Ok(Self::type_object(py)
-            .call(
-                (hour, minute, second, microsecond, tzinfo),
-                Some(&[("fold", fold)].into_py_dict(py)?),
-            )?
-            .cast_into()?)
+        {
+            let args = (hour, minute, second, microsecond, tzinfo);
+            // `fold` defaults to 0, so only build the kwargs dict when it is set.
+            let kwargs = if fold {
+                Some([(intern!(py, "fold"), true)].into_py_dict(py)?)
+            } else {
+                None
+            };
+            Ok(Self::type_object(py)
+                .call(args, kwargs.as_ref())?
+                .cast_into()?)
+        }
     }
 }
 
@@ -1083,6 +1095,23 @@ mod tests {
 
             assert!(!a.unwrap().get_fold());
             assert!(b.unwrap().get_fold());
+        });
+    }
+
+    #[test]
+    #[cfg_attr(target_arch = "wasm32", ignore)] // DateTime import fails on wasm for mysterious reasons
+    fn test_time_new_with_fold() {
+        Python::attach(|py| {
+            let utc = PyTzInfo::utc(py).unwrap();
+            let a = PyTime::new_with_fold(py, 20, 32, 40, 341516, Some(&utc), false).unwrap();
+            let b = PyTime::new_with_fold(py, 20, 32, 40, 341516, None, true).unwrap();
+
+            assert!(!a.get_fold());
+            assert!(b.get_fold());
+            assert_eq!(a.get_hour(), 20);
+            assert_eq!(a.get_microsecond(), 341516);
+            assert!(a.get_tzinfo().is_some());
+            assert!(b.get_tzinfo().is_none());
         });
     }
 
