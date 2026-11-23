@@ -109,6 +109,9 @@ fn bench_add_mismatched_type_reflected(b: &mut Bencher<'_>) {
         // `AddSame.__add__` rejects the operand with NotImplemented, then
         // `RaddFromAddSame.__radd__` handles it.
         b.iter(|| lhs.add(rhs).unwrap());
+    });
+}
+
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Clone, Copy)]
 enum SimpleEnum {
