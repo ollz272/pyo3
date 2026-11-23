@@ -190,11 +190,11 @@ fn time_offset_datetime_nonzero_extract(b: &mut Bencher<'_>) {
 }
 
 fn jiff_zoned_utc_extract(b: &mut Bencher<'_>) {
-    extract_bench::<jiff::ZonedDateTime>(b, true);
+    extract_bench::<jiff::Zoned>(b, true);
 }
 
 fn jiff_zoned_nonzero_extract(b: &mut Bencher<'_>) {
-    extract_bench::<jiff::ZonedDateTime>(b, false);
+    extract_bench::<jiff::Zoned>(b, false);
 }
 
 fn jiff_timestamp_utc_extract(b: &mut Bencher<'_>) {
