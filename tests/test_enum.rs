@@ -134,6 +134,41 @@ fn test_enum_to_int() {
 }
 
 #[test]
+fn test_enum_compare_non_int() {
+    Python::attach(|py| {
+        let one = Py::new(py, CustomDiscriminant::One).unwrap();
+        py_run!(
+            py,
+            one,
+            r#"
+            class Indexable:
+                def __index__(self):
+                    return 1
+
+            class BadIndex:
+                def __index__(self):
+                    raise ValueError("nope")
+
+            for other in (None, "text", 1.0, object(), BadIndex(), 2**100):
+                assert not (one == other)
+                assert one != other
+                assert not (other == one)
+                assert other != one
+                assert one.__eq__(other) is NotImplemented
+                assert one.__ne__(other) is NotImplemented
+
+            assert one == Indexable()
+            assert not (one != Indexable())
+            assert one == True
+            assert one != False
+            assert one != [one]
+            assert one in [None, "text", 1]
+        "#
+        )
+    })
+}
+
+#[test]
 fn test_enum_compare_int() {
     Python::attach(|py| {
         let one = Py::new(py, CustomDiscriminant::One).unwrap();

@@ -109,6 +109,46 @@ fn bench_add_mismatched_type_reflected(b: &mut Bencher<'_>) {
         // `AddSame.__add__` rejects the operand with NotImplemented, then
         // `RaddFromAddSame.__radd__` handles it.
         b.iter(|| lhs.add(rhs).unwrap());
+#[pyclass(eq, eq_int)]
+#[derive(PartialEq, Clone, Copy)]
+enum SimpleEnum {
+    A,
+    B,
+}
+
+fn bench_enum_eq_same_type(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let a = &Bound::new(py, SimpleEnum::A).unwrap().into_any();
+        let other = &Bound::new(py, SimpleEnum::B).unwrap().into_any();
+
+        b.iter(|| a.eq(other).unwrap());
+    });
+}
+
+fn bench_enum_eq_int(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let a = &Bound::new(py, SimpleEnum::A).unwrap().into_any();
+        let other = &0_i32.into_pyobject(py).unwrap().into_any();
+
+        b.iter(|| a.eq(other).unwrap());
+    });
+}
+
+fn bench_enum_eq_none(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let a = &Bound::new(py, SimpleEnum::A).unwrap().into_any();
+        let other = &py.None().into_bound(py);
+
+        b.iter(|| a.eq(other).unwrap());
+    });
+}
+
+fn bench_enum_eq_str(b: &mut Bencher<'_>) {
+    Python::attach(|py| {
+        let a = &Bound::new(py, SimpleEnum::A).unwrap().into_any();
+        let other = &"text".into_pyobject(py).unwrap().into_any();
+
+        b.iter(|| a.eq(other).unwrap());
     });
 }
 
@@ -127,6 +167,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         "add_mismatched_type_reflected",
         bench_add_mismatched_type_reflected,
     );
+    c.bench_function("enum_eq_same_type", bench_enum_eq_same_type);
+    c.bench_function("enum_eq_int", bench_enum_eq_int);
+    c.bench_function("enum_eq_none", bench_enum_eq_none);
+    c.bench_function("enum_eq_str", bench_enum_eq_str);
 }
 
 criterion_group!(benches, criterion_benchmark);

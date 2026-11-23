@@ -2394,11 +2394,15 @@ fn pyclass_richcmp_simple_enum(
     let eq_int = options.eq_int.map(|eq_int| {
         quote_spanned! { eq_int.span() =>
             let self_val = self.__pyo3__int__();
-            if let ::core::result::Result::Ok(other) = #pyo3_path::types::PyAnyMethods::extract::<#repr_type>(other).or_else(|_| {
-                #pyo3_path::types::PyAnyMethods::extract::<#pyo3_path::PyClassGuard<'_, Self>>(other).map(|o| o.__pyo3__int__())
-            }) {
-                return match op {
-                    #arms
+            // `eq_int` requires `eq`, so `other` is already known not to be `Self` here.
+            // Only attempt integer extraction when `other` supports `__index__`, otherwise
+            // CPython would raise (and PyO3 would then discard) a `TypeError`.
+            // SAFETY: `other` is a valid Python object pointer, and the GIL is held.
+            if unsafe { #pyo3_path::ffi::PyIndex_Check(other.as_ptr()) } != 0 {
+                if let ::core::result::Result::Ok(other) = #pyo3_path::types::PyAnyMethods::extract::<#repr_type>(other) {
+                    return match op {
+                        #arms
+                    }
                 }
             }
         }
