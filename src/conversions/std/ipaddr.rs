@@ -3,9 +3,9 @@ use crate::exceptions::PyValueError;
 #[cfg(feature = "experimental-inspect")]
 use crate::inspect::{PyStaticExpr, type_hint_identifier, type_hint_union};
 use crate::sync::PyOnceLock;
-use crate::types::PyType;
 use crate::types::any::PyAnyMethods;
 use crate::types::string::PyStringMethods;
+use crate::types::{PyBytes, PyBytesMethods, PyString, PyType};
 use crate::{Borrowed, Bound, FromPyObject, Py, PyAny, PyErr, Python, intern};
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -19,8 +19,26 @@ impl FromPyObject<'_, '_> for IpAddr {
     );
 
     fn extract(obj: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
+        // Fast path: an exact `str` has no `.packed` attribute, so skip the failing
+        // `getattr` (which would build and discard an `AttributeError`) and parse directly.
+        if let Ok(s) = obj.cast_exact::<PyString>() {
+            return s.to_cow()?.parse().map_err(PyValueError::new_err);
+        }
+
         match obj.getattr(intern!(obj.py(), "packed")) {
             Ok(packed) => {
+                // Fast path: `bytes` can be dispatched on length directly, avoiding the
+                // `[u8; 4]` extraction failing (and building a discarded `ValueError`) for IPv6.
+                if let Ok(bytes) = packed.cast::<PyBytes>() {
+                    let bytes = bytes.as_bytes();
+                    return if let Ok(packed) = <[u8; 4]>::try_from(bytes) {
+                        Ok(IpAddr::V4(Ipv4Addr::from(packed)))
+                    } else if let Ok(packed) = <[u8; 16]>::try_from(bytes) {
+                        Ok(IpAddr::V6(Ipv6Addr::from(packed)))
+                    } else {
+                        Err(PyValueError::new_err("invalid packed length"))
+                    };
+                }
                 if let Ok(packed) = packed.extract::<[u8; 4]>() {
                     Ok(IpAddr::V4(Ipv4Addr::from(packed)))
                 } else if let Ok(packed) = packed.extract::<[u8; 16]>() {
@@ -132,8 +150,6 @@ impl<'py> IntoPyObject<'py> for &IpAddr {
 mod test_ipaddr {
     use core::str::FromStr;
 
-    use crate::types::PyString;
-
     use super::*;
 
     #[test]
@@ -170,6 +186,76 @@ mod test_ipaddr {
 
             let py_str = PyString::new(py, "invalid");
             assert!(py_str.extract::<IpAddr>().is_err());
+
+            let py_str = PyString::new(py, "127.0.0.1");
+            let ip: IpAddr = py_str.extract().unwrap();
+            assert_eq!(ip, IpAddr::from_str("127.0.0.1").unwrap());
+        });
+    }
+
+    #[test]
+    fn test_packed_bytes_lengths() {
+        use crate::ffi::c_str;
+        use crate::types::PyAnyMethods;
+
+        Python::attach(|py| {
+            let eval = |code: &core::ffi::CStr| py.eval(code, None, None).unwrap();
+
+            // ipaddress objects (bytes `packed`, lengths 4 and 16)
+            let ip: IpAddr = eval(c_str!("__import__('ipaddress').IPv4Address('10.1.2.3')"))
+                .extract()
+                .unwrap();
+            assert_eq!(ip, IpAddr::from_str("10.1.2.3").unwrap());
+            let ip: IpAddr = eval(c_str!("__import__('ipaddress').IPv6Address('2001:db8::1')"))
+                .extract()
+                .unwrap();
+            assert_eq!(ip, IpAddr::from_str("2001:db8::1").unwrap());
+
+            // duck-typed `packed` of bytes with an invalid length
+            let bad = eval(c_str!("type('X', (), {'packed': b'\\x01\\x02\\x03'})()"));
+            let err = bad.extract::<IpAddr>().unwrap_err();
+            assert!(err.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                err.value(py).str().unwrap().to_cow().unwrap(),
+                "invalid packed length"
+            );
+
+            // non-bytes `packed` keeps using the generic extraction path
+            let ba = eval(c_str!(
+                "type('X', (), {'packed': bytearray(b'\\x7f\\x00\\x00\\x01')})()"
+            ));
+            assert_eq!(
+                ba.extract::<IpAddr>().unwrap(),
+                IpAddr::from_str("127.0.0.1").unwrap()
+            );
+            let lst = eval(c_str!("type('X', (), {'packed': [127, 0, 0, 1]})()"));
+            assert_eq!(
+                lst.extract::<IpAddr>().unwrap(),
+                IpAddr::from_str("127.0.0.1").unwrap()
+            );
+            let bad_lst = eval(c_str!("type('X', (), {'packed': [1, 2, 3]})()"));
+            assert!(bad_lst.extract::<IpAddr>().is_err());
+        });
+    }
+
+    #[test]
+    fn test_str_subclass_uses_packed() {
+        use crate::ffi::c_str;
+        use crate::types::PyAnyMethods;
+
+        // A `str` subclass is not an exact `str`, so its `packed` attribute is still honoured.
+        Python::attach(|py| {
+            let obj = py
+                .eval(
+                    c_str!("type('S', (str,), {'packed': b'\\x01\\x02\\x03\\x04'})('ignored')"),
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                obj.extract::<IpAddr>().unwrap(),
+                IpAddr::from_str("1.2.3.4").unwrap()
+            );
         });
     }
 }

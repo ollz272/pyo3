@@ -120,3 +120,7 @@ name = "bench_int128"
 harness = false
 
 [workspace]
+
+[[bench]]
+name = "bench_ipaddr"
+harness = false
