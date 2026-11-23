@@ -2397,8 +2397,7 @@ fn pyclass_richcmp_simple_enum(
             // `eq_int` requires `eq`, so `other` is already known not to be `Self` here.
             // Only attempt integer extraction when `other` supports `__index__`, otherwise
             // CPython would raise (and PyO3 would then discard) a `TypeError`.
-            // SAFETY: `other` is a valid Python object pointer, and the GIL is held.
-            if unsafe { #pyo3_path::ffi::PyIndex_Check(other.as_ptr()) } != 0 {
+            if #pyo3_path::impl_::pyclass::supports_index(other) {
                 if let ::core::result::Result::Ok(other) = #pyo3_path::types::PyAnyMethods::extract::<#repr_type>(other) {
                     return match op {
                         #arms

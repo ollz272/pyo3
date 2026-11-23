@@ -54,6 +54,16 @@ pub const fn weaklist_offset<T: PyClass>() -> PyObjectOffset {
     <T as PyClassImpl>::Layout::WEAKLIST_OFFSET
 }
 
+/// Returns whether `obj` supports `__index__`, i.e. whether integer extraction could succeed.
+///
+/// Used by the `#[pyclass(eq, eq_int)]` comparison to avoid raising (and discarding) a
+/// `TypeError` when comparing with objects which are not integers.
+#[inline]
+pub fn supports_index(obj: &crate::Bound<'_, PyAny>) -> bool {
+    // SAFETY: `obj` is a valid Python object pointer and `PyIndex_Check` only reads a type slot.
+    unsafe { ffi::PyIndex_Check(obj.as_ptr()) != 0 }
+}
+
 /// Extracts a `T: PyClass + Clone` from a Python object by cloning it out of
 /// the [`PyClassGuard`].
 #[inline]
